@@ -572,6 +572,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         Each completed utterance (after a silence) is pushed to prompt_queue,
         exactly as if the user had typed it in the terminal.
         """
+        import traceback
         from mistralai.extra.realtime import UnknownRealtimeEvent
         from mistralai.models import (
             AudioFormat,
@@ -582,19 +583,34 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         )
         import pyaudio
 
-        STT_SAMPLE_RATE    = 16_000
-        STT_CHUNK_MS       = 480
-        STT_MODEL          = "voxtral-mini-transcribe-realtime-2602"
-        SILENCE_MIN_CHARS  = 3   # ignore very short transcriptions (breath sounds etc.)
+        STT_SAMPLE_RATE   = 16_000
+        STT_CHUNK_MS      = 480
+        STT_MODEL         = "voxtral-mini-transcribe-realtime-2602"
+        SILENCE_MIN_CHARS = 3
 
+        # ── Startup mic test ──────────────────────────────────────────────
+        print("\n🎤  Testing microphone…", flush=True)
+        try:
+            _p = pyaudio.PyAudio()
+            _chunk = int(STT_SAMPLE_RATE * STT_CHUNK_MS / 1000)
+            _st = _p.open(format=pyaudio.paInt16, channels=1,
+                          rate=STT_SAMPLE_RATE, input=True,
+                          frames_per_buffer=_chunk)
+            _st.read(_chunk, exception_on_overflow=False)   # one test read
+            _st.stop_stream(); _st.close(); _p.terminate()
+            print("    ✅  Microphone OK", flush=True)
+        except Exception as exc:
+            print(f"\n❌  Could not open microphone: {exc}", flush=True)
+            print("    Voice input disabled. Continue with keyboard only.", flush=True)
+            return
+
+        # ── Mic async generator ───────────────────────────────────────────
         async def iter_mic():
             p = pyaudio.PyAudio()
             chunk_samples = int(STT_SAMPLE_RATE * STT_CHUNK_MS / 1000)
             stream = p.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=STT_SAMPLE_RATE,
-                input=True,
+                format=pyaudio.paInt16, channels=1,
+                rate=STT_SAMPLE_RATE, input=True,
                 frames_per_buffer=chunk_samples,
             )
             loop = asyncio.get_running_loop()
@@ -605,15 +621,13 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                     )
                     yield data
             finally:
-                stream.stop_stream()
-                stream.close()
-                p.terminate()
+                stream.stop_stream(); stream.close(); p.terminate()
 
-        stt_client  = Mistral(api_key=MISTRAL_API_KEY)
-        audio_fmt   = AudioFormat(encoding="pcm_s16le", sample_rate=STT_SAMPLE_RATE)
+        stt_client = Mistral(api_key=MISTRAL_API_KEY)
+        audio_fmt  = AudioFormat(encoding="pcm_s16le", sample_rate=STT_SAMPLE_RATE)
         buf: list[str] = []
 
-        print("\n🎤  Voice input active — speak to steer music. Silence = send.\n", flush=True)
+        print("\n🎤  Connecting to Voxtral realtime…", flush=True)
         try:
             async for event in stt_client.audio.realtime.transcribe_stream(
                 audio_stream=iter_mic(),
@@ -623,23 +637,29 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                 if stop_event.is_set():
                     break
                 if isinstance(event, RealtimeTranscriptionSessionCreated):
-                    print("    📡  Voxtral connected. Listening…", flush=True)
+                    # \n first to escape the \r status line
+                    print("\n    📡  Voxtral ready — speak to steer the music!", flush=True)
                 elif isinstance(event, TranscriptionStreamTextDelta):
                     buf.append(event.text)
-                    print(f"\r🎤  …{' '.join(buf)[-60:]}   ", end="", flush=True)
+                    # \n clears whatever \r the status display left behind
+                    print(f"\n🎤  Hearing: {''.join(buf)[-80:]}   ", end="", flush=True)
                 elif isinstance(event, TranscriptionStreamDone):
-                    text = " ".join(buf).strip()
+                    text = "".join(buf).strip()
                     buf.clear()
                     if len(text) >= SILENCE_MIN_CHARS:
-                        print(f"\n🎤  Voice: \"{text}\"  → sending to DJ…", flush=True)
+                        print(f"\n🎤  ✓ Sending: \"{text}\"", flush=True)
                         prompt_queue.put_nowait(text)
+                    else:
+                        print("", flush=True)   # blank to close partial line
                 elif isinstance(event, RealtimeTranscriptionError):
                     print(f"\n⚠️  STT error: {event}", flush=True)
                 elif isinstance(event, UnknownRealtimeEvent):
                     pass
         except Exception as exc:
             if not stop_event.is_set():
-                print(f"\n⚠️  Voice listener stopped: {exc}", flush=True)
+                print(f"\n❌  Voice listener crashed: {exc}", flush=True)
+                traceback.print_exc()
+
 
     # --- Launch ---
     print(f"🎵  Live AI DJ — Starting with: \"{initial_prompt}\"")
