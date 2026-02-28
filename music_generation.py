@@ -443,6 +443,22 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
 
     # Step 1: translate scene/narrative into musical DNA using Mistral
     initial_palette = SteeringEngine.translate_scene_to_palette(initial_prompt)
+
+    # In ambient mode, blend in sparse/atmospheric anchors so Lyria
+    # generates quiet background texture rather than a full structured song.
+    if args.ambient:
+        ambient_anchors = {
+            "sparse ambient texture": 0.8,
+            "slow atmospheric pads": 0.7,
+            "minimal sparse arrangement": 0.6,
+        }
+        # Reduce scene palette weights slightly then merge ambient anchors
+        initial_palette = {t: w * 0.75 for t, w in initial_palette.items()}
+        initial_palette.update(ambient_anchors)
+        # Ambient defaults: lower guidance if not overridden by user
+        if args.guidance == 3.0:   # still at default — user didn’t touch it
+            args.guidance = 2.0
+
     print(f"    🎼 Musical DNA: {palette_display(initial_palette)}")
 
     engine = SteeringEngine(initial_palette)
@@ -552,6 +568,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     # --- Launch ---
     print(f"🎵  Live AI DJ — Starting with: \"{initial_prompt}\"")
     print(f"    Mistral model : {MISTRAL_MODEL}")
+    print(f"    Mode          : {'Ambient / RPG landscape' if args.ambient else 'Full music'}")
     print(f"    Temperature   : {args.temperature}")
     print(f"    Guidance      : {args.guidance}")
     print(f"    Seed          : {args.seed if args.seed is not None else 'random'}")
@@ -580,6 +597,9 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                     temperature=args.temperature,
                     guidance=args.guidance,
                     seed=args.seed,
+                    # Ambient mode: low density (sparse notes) + low brightness (soft timbre)
+                    density=args.density,
+                    brightness=args.brightness,
                 )
             )
 
@@ -657,7 +677,32 @@ def main() -> None:
         default=42,
         help="Random seed for reproducible generation (default: 42)",
     )
+    parser.add_argument(
+        "--ambient",
+        action="store_true",
+        help="Ambient / RPG landscape mode: sparse texture, minimal arrangement, low energy",
+    )
+    parser.add_argument(
+        "--density",
+        type=float,
+        default=None,
+        help="Note density 0.0 (sparse) – 1.0 (dense). Ambient mode defaults to 0.3.",
+    )
+    parser.add_argument(
+        "--brightness",
+        type=float,
+        default=None,
+        help="Timbre brightness 0.0 (dark/soft) – 1.0 (bright). Ambient mode defaults to 0.3.",
+    )
     args = parser.parse_args()
+
+    # Apply ambient defaults for density/brightness if not manually overridden
+    if args.ambient:
+        if args.density is None:
+            args.density = 0.3
+        if args.brightness is None:
+            args.brightness = 0.3
+
     initial_prompt = " ".join(args.prompt)
 
     try:
