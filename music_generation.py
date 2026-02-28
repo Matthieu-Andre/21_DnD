@@ -203,34 +203,91 @@ class SteeringEngine:
     has context on how the session has evolved.
     """
 
-    SYSTEM_PROMPT = f"""You are an expert AI DJ assistant controlling a real-time music generation system.
+    SYSTEM_PROMPT = f"""You are an expert AI DJ assistant controlling a real-time music generation system (Google Lyria RealTime).
 
 {LYRIA_REFERENCE_TABLE}
 
-## Your job
-Given:
-  - The CURRENT PALETTE (JSON list of {{text, weight}} entries)
-  - The USER'S INSTRUCTION
+## Your ONLY job
+Given the CURRENT PALETTE and a USER INSTRUCTION, return a JSON array of
+{{\"text\": str, \"weight\": float}} representing the ADJUSTED palette.
+Respond with RAW JSON ONLY — no markdown, no explanation.
 
-Return ONLY a valid JSON array of {{\"text\": str, \"weight\": float}} objects
-representing the NEW target palette. No explanation, no markdown — just raw JSON.
+## THE GOLDEN RULE: Musical DNA Must Survive
+The current palette encodes the musical identity of the session (genre, instruments, mood).
+Every steering instruction is an ADJUSTMENT, not a rewrite.
 
-Example output:
-[{{"text": "techno rave", "weight": 1.2}}, {{"text": "energetic drums", "weight": 0.7}}]
+Dominating prompts (weight ≥ 0.5) are ANCHORS — they must appear in your output
+unless the user EXPLICITLY says to stop, remove, or switch genre entirely.
 
-Remember:
-- Apply the steering rules from the reference table above.
-- Preserve musical continuity. Prefer gradual evolution over hard resets.
-- Speed is critical — keep prompts concise.
+## How to classify an instruction
+
+### Class A — Narrative / scene evolution (most common)
+The user describes what is HAPPENING in the scene. The music should evolve
+to match the new energy/mood while staying in the same musical world.
+→ Strategy: Keep all anchors. Adjust tempo/energy/intensity prompts only.
+→ Examples: "knight gets on a horse", "the battle begins", "tension rises",
+           "more energy", "he finds treasure", "they celebrate"
+
+### Class B — Direct musical tweak
+The user explicitly names a musical element to change.
+→ Strategy: Adjust that element; keep everything else.
+→ Examples: "more bass", "add piano", "slower tempo", "louder drums"
+
+### Class C — Explicit genre/style change
+The user EXPLICITLY asks to switch to a different genre or start fresh.
+→ Strategy: Transition — reduce anchors to 0.3 while boosting the new style.
+→ Examples: "switch to jazz", "make it electronic now", "go full metal",
+           "stop the medieval stuff", "completely different vibe"
+
+## Worked examples
+
+EXAMPLE 1 — Narrative evolution (Class A)
+Current palette: [{{"text": "medieval folk", "weight": 1.0}},
+                  {{"text": "calm countryside", "weight": 0.8}}]
+User: "the knight gets on his horse and starts galloping"
+BAD output: [{{"text": "galloping hooves", "weight": 1.0}}, {{"text": "battle drums", "weight": 0.8}}]
+  ← WRONG: wiped the medieval identity entirely
+GOOD output: [{{"text": "medieval folk", "weight": 1.0}},
+              {{"text": "calm countryside", "weight": 0.4}},
+              {{"text": "faster tempo", "weight": 0.7}},
+              {{"text": "epic orchestral swell", "weight": 0.6}}]
+  ← RIGHT: medieval stays dominant, energy/tempo are added on top
+
+EXAMPLE 2 — Direct tweak (Class B)
+Current palette: [{{"text": "techno rave", "weight": 1.0}}, {{"text": "driving bassline", "weight": 0.8}}]
+User: "more energy"
+GOOD output: [{{"text": "techno rave", "weight": 1.2}},
+              {{"text": "driving bassline", "weight": 1.0}},
+              {{"text": "high energy", "weight": 0.6}}]
+
+EXAMPLE 3 — Explicit change (Class C)
+Current palette: [{{"text": "techno rave", "weight": 1.0}}]
+User: "switch to medieval folk music now"
+GOOD output: [{{"text": "techno rave", "weight": 0.3}},
+              {{"text": "medieval folk", "weight": 1.2}},
+              {{"text": "acoustic instruments", "weight": 0.8}}]
 """
 
     def __init__(self, initial_prompt: str):
         self.history: list[dict] = []
         self.current_palette: dict[str, float] = {initial_prompt: 1.0}
+        # Anchors are the dominant prompts from the PREVIOUS step.
+        # Used to enforce continuity if Mistral silently drops them.
+        self._prev_anchors: dict[str, float] = {initial_prompt: 1.0}
 
     def _palette_to_str(self) -> str:
         items = [{"text": t, "weight": w} for t, w in self.current_palette.items()]
         return json.dumps(items)
+
+    def _enforce_continuity(self, new_palette: dict[str, float]) -> dict[str, float]:
+        """Safety net: restore any anchor (weight ≥ 0.5) silently dropped by Mistral."""
+        result = dict(new_palette)
+        for text, weight in self._prev_anchors.items():
+            if text not in result:
+                # Restore at 40 % of its former strength — enough to stay
+                # musically present without dominating the new direction.
+                result[text] = round(weight * 0.4, 3)
+        return result
 
     async def steer(self, user_instruction: str) -> Optional[dict[str, float]]:
         """
@@ -276,6 +333,12 @@ Remember:
 
             if not new_palette:
                 raise ValueError("Empty palette returned")
+
+            # Enforce continuity — restore silently dropped anchors
+            new_palette = self._enforce_continuity(new_palette)
+
+            # Update anchors to current dominant prompts for next round
+            self._prev_anchors = {t: w for t, w in new_palette.items() if w >= 0.5}
 
             # Store the assistant response in history for context continuity
             self.history.append({"role": "assistant", "content": raw})
