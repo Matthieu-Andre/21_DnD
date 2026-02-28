@@ -1,31 +1,41 @@
 """
-music_generation.py  —  Live AI DJ powered by Google Lyria RealTime
+music_generation.py  —  Live AI DJ with Progressive Prompt Steering
 
-Continuously plays AI-generated music through your speakers and lets you
-steer the style in real-time by typing new prompts into the terminal.
+Powered by Google Lyria RealTime + Mistral AI steering intelligence.
+
+The DJ maintains a "prompt palette" — multiple weighted prompts mixed
+simultaneously by Lyria. Each user input is interpreted by Mistral (fast,
+low-latency model) which understands the full steering history and adjusts the
+palette weights gradually rather than hard-resetting them.
 
 Usage:
-    python music_generation.py "chill lo-fi beats"
+    python music_generation.py "techno rave"
+    python music_generation.py "chill lo-fi beats" --temperature 0.9 --guidance 4.0 --crossfade 4.0
 
 While running:
-    • Type a new prompt and press Enter to smoothly transition the music
+    • Type a steering instruction and press Enter (e.g. "more energy", "add some jazz", "slow it down")
     • Press Ctrl+C to stop
 
 Architecture:
-    One persistent WebSocket connection to Lyria RealTime.
-    Only sends API messages when the prompt actually changes.
-    Audio is streamed in real-time through sounddevice (PortAudio).
+    One persistent WebSocket to Lyria RealTime.
+    Mistral flash model interprets each instruction relative to full history.
+    Crossfade loop sends interpolated weights over N steps for smooth morphing.
+    Audio streamed via sounddevice (PortAudio).
 """
 
+import argparse
 import asyncio
 import collections
+import json
 import os
 import sys
 import threading
 import time
+from typing import Optional
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from mistralai import Mistral
 
 try:
     import sounddevice as sd
@@ -34,7 +44,7 @@ except ImportError:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Config
+# Config / env
 # ---------------------------------------------------------------------------
 load_dotenv()
 
@@ -42,33 +52,86 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise EnvironmentError("GOOGLE_API_KEY not found in .env")
 
-MODEL = "models/lyria-realtime-exp"
-SAMPLE_RATE = 48_000       # Hz  (Lyria spec)
-CHANNELS = 2               # stereo
-SAMPLE_WIDTH = 2            # 16-bit PCM → 2 bytes per sample
-BYTES_PER_FRAME = CHANNELS * SAMPLE_WIDTH   # 4 bytes per frame
-BLOCK_SIZE = 2400           # frames per sounddevice callback (50 ms @ 48 kHz)
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+if not MISTRAL_API_KEY:
+    raise EnvironmentError("MISTRAL_API_KEY not found in .env")
 
-# Pre-buffer: accumulate this many seconds of audio before starting playback
-# to avoid underruns while the WebSocket fills the buffer.
+MODEL = "models/lyria-realtime-exp"
+
+# Fastest Mistral text model — minimises steering latency
+MISTRAL_MODEL = "mistral-small-latest"
+
+SAMPLE_RATE = 48_000
+CHANNELS = 2
+SAMPLE_WIDTH = 2
+BYTES_PER_FRAME = CHANNELS * SAMPLE_WIDTH
+BLOCK_SIZE = 2400
+
 PRE_BUFFER_SECONDS = 0.5
 PRE_BUFFER_BYTES = int(PRE_BUFFER_SECONDS * SAMPLE_RATE * BYTES_PER_FRAME)
-
-# Ring-buffer capacity in bytes (~10 seconds of audio)
 BUFFER_CAPACITY = SAMPLE_RATE * BYTES_PER_FRAME * 10
 
-client = genai.Client(
+lyria_client = genai.Client(
     api_key=GOOGLE_API_KEY,
     http_options={"api_version": "v1alpha"},
 )
 
+mistral_client = Mistral(api_key=MISTRAL_API_KEY)
+
+# ---------------------------------------------------------------------------
+# Lyria Reference Table
+# Injected into the Mistral system prompt so the model knows exactly what
+# knobs are available and what values make sense.
+# ---------------------------------------------------------------------------
+LYRIA_REFERENCE_TABLE = """
+## Lyria RealTime — Controllable Parameters Reference
+
+### Prompt palette (your primary tool)
+Each prompt entry has:
+  - text  : a short musical descriptor (genre, instrument, mood, tempo, etc.)
+  - weight: float, typically 0.0 – 2.0
+    • 0.0  = silent / removed
+    • 0.5  = subtle influence
+    • 1.0  = normal influence (reference)
+    • 1.5  = strong emphasis
+    • 2.0  = dominant influence
+
+Effective text descriptors (non-exhaustive):
+  Genres   : techno, house, trance, drum and bass, lo-fi hip-hop, jazz, blues,
+              classical, ambient, pop, rock, metal, afrobeat, bossa nova,
+              reggaeton, folk, cinematic, orchestral
+  Tempo    : slow tempo, moderate tempo, fast tempo, very fast tempo, 160 BPM,
+              130 BPM, half-time feel, double-time feel
+  Energy   : low energy, medium energy, high energy, building tension,
+              euphoric drop, breakdown, outro
+  Mood     : melancholic, uplifting, dark, ethereal, aggressive, relaxing,
+              mysterious, euphoric, nostalgic
+  Texture  : sparse, dense, minimalist, layered, driving bassline, heavy kick,
+              rolling bass, synth pads, arpeggiated synths
+  Instruments: piano, guitar, violin, trumpet, synthesizer, drum machine,
+               808 bass, acoustic drums, strings, brass section
+
+### Generation config (set once at startup, not changed per-step)
+  temperature : 0.5 – 2.0   → lower = more predictable, higher = more creative
+  guidance    : 1.0 – 6.0   → how strictly the model follows prompts
+
+### Steering rules
+  1. NEVER set all weights to 0 simultaneously — music would cut out.
+  2. Preserve the dominant existing prompt(s) unless the user explicitly asks
+     to switch genre entirely.
+  3. "More X" → increase weight of X-related prompts or add a new X entry.
+  4. "Less X" → reduce weight of X-related entries (minimum 0.1 if it was active).
+  5. "Remove X" → set weight to 0.0.
+  6. "Only X" → set all other weights to 0.0, boost X to 1.5.
+  7. Smooth changes: prefer delta of ±0.3–0.5 per instruction rather than jumps.
+  8. Keep palette lean: 2–4 active prompts usually sounds best.
+     Drop entries with weight < 0.05.
+"""
 
 # ---------------------------------------------------------------------------
 # Thread-safe audio ring buffer
 # ---------------------------------------------------------------------------
 class AudioBuffer:
-    """A simple thread-safe byte buffer backed by a deque of chunks."""
-
     def __init__(self, capacity: int = BUFFER_CAPACITY):
         self._chunks: collections.deque[bytes] = collections.deque()
         self._total_bytes = 0
@@ -81,17 +144,14 @@ class AudioBuffer:
             self._chunks.append(data)
             self._total_bytes += len(data)
             self._total_received += len(data)
-            # Evict oldest if over capacity
             while self._total_bytes > self._capacity and self._chunks:
                 old = self._chunks.popleft()
                 self._total_bytes -= len(old)
 
     def pull(self, n: int) -> bytes:
-        """Pull up to n bytes from the buffer. Returns silence if empty."""
         with self._lock:
             if self._total_bytes == 0:
                 return b"\x00" * n
-
             result = bytearray()
             while len(result) < n and self._chunks:
                 chunk = self._chunks[0]
@@ -104,8 +164,6 @@ class AudioBuffer:
                     result.extend(chunk[:needed])
                     self._chunks[0] = chunk[needed:]
                     self._total_bytes -= needed
-
-            # Pad with silence if not enough data
             if len(result) < n:
                 result.extend(b"\x00" * (n - len(result)))
             return bytes(result)
@@ -125,7 +183,6 @@ class AudioBuffer:
 # Terminal input reader (runs in a background thread)
 # ---------------------------------------------------------------------------
 def input_reader(prompt_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-    """Blocking thread that reads lines from stdin and pushes them to the async queue."""
     try:
         while True:
             line = input()
@@ -137,22 +194,162 @@ def input_reader(prompt_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
 
 
 # ---------------------------------------------------------------------------
+# Mistral Steering Engine
+# ---------------------------------------------------------------------------
+class SteeringEngine:
+    """
+    Wraps the Mistral API to interpret user instructions and update the
+    prompt palette. Maintains a full conversation history so the model
+    has context on how the session has evolved.
+    """
+
+    SYSTEM_PROMPT = f"""You are an expert AI DJ assistant controlling a real-time music generation system.
+
+{LYRIA_REFERENCE_TABLE}
+
+## Your job
+Given:
+  - The CURRENT PALETTE (JSON list of {{text, weight}} entries)
+  - The USER'S INSTRUCTION
+
+Return ONLY a valid JSON array of {{\"text\": str, \"weight\": float}} objects
+representing the NEW target palette. No explanation, no markdown — just raw JSON.
+
+Example output:
+[{{"text": "techno rave", "weight": 1.2}}, {{"text": "energetic drums", "weight": 0.7}}]
+
+Remember:
+- Apply the steering rules from the reference table above.
+- Preserve musical continuity. Prefer gradual evolution over hard resets.
+- Speed is critical — keep prompts concise.
+"""
+
+    def __init__(self, initial_prompt: str):
+        self.history: list[dict] = []
+        self.current_palette: dict[str, float] = {initial_prompt: 1.0}
+
+    def _palette_to_str(self) -> str:
+        items = [{"text": t, "weight": w} for t, w in self.current_palette.items()]
+        return json.dumps(items)
+
+    async def steer(self, user_instruction: str) -> Optional[dict[str, float]]:
+        """
+        Ask Mistral to interpret the user instruction and return an updated palette.
+        Returns None on failure (caller should skip the update gracefully).
+        """
+        user_content = (
+            f"Current palette: {self._palette_to_str()}\n"
+            f"User instruction: {user_instruction}"
+        )
+
+        # Append to conversation history (gives Mistral memory of the session)
+        self.history.append({"role": "user", "content": user_content})
+
+        messages = [{"role": "system", "content": self.SYSTEM_PROMPT}] + self.history
+
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: mistral_client.chat.complete(
+                    model=MISTRAL_MODEL,
+                    messages=messages,
+                    max_tokens=256,
+                    temperature=0.2,  # Low temperature → consistent, fast, structured JSON
+                ),
+            )
+            raw = response.choices[0].message.content.strip()
+
+            # Strip markdown fences if the model wraps its output
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+
+            entries = json.loads(raw)
+            new_palette = {
+                e["text"]: float(e["weight"])
+                for e in entries
+                if e.get("text") and float(e.get("weight", 0)) > 0
+            }
+
+            if not new_palette:
+                raise ValueError("Empty palette returned")
+
+            # Store the assistant response in history for context continuity
+            self.history.append({"role": "assistant", "content": raw})
+
+            return new_palette
+
+        except Exception as exc:
+            # Rollback the failed user message from history
+            if self.history and self.history[-1]["role"] == "user":
+                self.history.pop()
+            print(f"\n⚠️  Mistral steering failed ({exc}), applying prompt directly.")
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Crossfade helper
+# ---------------------------------------------------------------------------
+def interpolate_palettes(
+    src: dict[str, float],
+    dst: dict[str, float],
+    t: float,  # 0.0 → 1.0
+) -> dict[str, float]:
+    """Linear interpolation between two palettes at position t."""
+    all_keys = set(src) | set(dst)
+    result = {}
+    for k in all_keys:
+        w = src.get(k, 0.0) * (1 - t) + dst.get(k, 0.0) * t
+        if w > 0.01:
+            result[k] = round(w, 3)
+    return result
+
+
+def palette_to_weighted_prompts(palette: dict[str, float]) -> list[types.WeightedPrompt]:
+    return [types.WeightedPrompt(text=t, weight=w) for t, w in palette.items()]
+
+
+# ---------------------------------------------------------------------------
+# Status helpers
+# ---------------------------------------------------------------------------
+def palette_display(palette: dict[str, float]) -> str:
+    parts = [f'"{t}":{w:.2f}' for t, w in sorted(palette.items(), key=lambda x: -x[1])]
+    return "  ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Main async logic
 # ---------------------------------------------------------------------------
-async def live_dj(initial_prompt: str) -> None:
+async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     audio_buf = AudioBuffer()
     prompt_queue: asyncio.Queue[str] = asyncio.Queue()
-    current_prompt = initial_prompt
     playback_started = threading.Event()
     stop_event = asyncio.Event()
 
-    # --- Sounddevice callback (runs in audio thread) ---
+    engine = SteeringEngine(initial_prompt)
+    # Shared palette (read by status display, written by steering handler)
+    palette_lock = threading.Lock()
+    current_palette: dict[str, float] = {initial_prompt: 1.0}
+
+    def get_palette() -> dict[str, float]:
+        with palette_lock:
+            return dict(current_palette)
+
+    def set_palette(p: dict[str, float]):
+        nonlocal current_palette
+        with palette_lock:
+            current_palette = dict(p)
+
+    # --- Sounddevice callback ---
     def audio_callback(outdata, frames, time_info, status):
         n_bytes = frames * BYTES_PER_FRAME
         data = audio_buf.pull(n_bytes)
-        outdata[:] = memoryview(data).cast("B").cast("h", shape=(frames, CHANNELS))  # noqa: E501
+        outdata[:] = memoryview(data).cast("B").cast("h", shape=(frames, CHANNELS))
 
-    # --- Task: receive audio chunks from Lyria ---
+    # --- Receive audio from Lyria ---
     async def receive_audio(session):
         buffering = True
         async for message in session.receive():
@@ -162,53 +359,87 @@ async def live_dj(initial_prompt: str) -> None:
                 continue
             for chunk in message.server_content.audio_chunks:
                 audio_buf.push(chunk.data)
-
-            # Start playback once we have enough pre-buffer
             if buffering and audio_buf.available >= PRE_BUFFER_BYTES:
                 buffering = False
                 playback_started.set()
 
-    # --- Task: watch for new prompts and send to Lyria ---
-    async def prompt_handler(session):
-        nonlocal current_prompt
+    # --- Steering handler ---
+    async def steering_handler(session):
         while not stop_event.is_set():
             try:
-                new_prompt = await asyncio.wait_for(prompt_queue.get(), timeout=0.5)
+                user_input = await asyncio.wait_for(prompt_queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
                 continue
 
-            if new_prompt != current_prompt:
-                current_prompt = new_prompt
-                print(f"\n🎶  Transitioning to: \"{current_prompt}\"")
-                await session.set_weighted_prompts(
-                    prompts=[
-                        types.WeightedPrompt(text=current_prompt, weight=1.0),
-                    ]
-                )
+            print(f"\n🧠  Mistral analysing: \"{user_input}\" …", flush=True)
+            t_start = time.perf_counter()
 
-    # --- Task: status display ---
+            src_palette = get_palette()
+
+            # Ask Mistral for the target palette
+            target = await engine.steer(user_input)
+
+            if target is None:
+                # Fallback: add the user input as a new prompt at weight 0.5
+                target = dict(src_palette)
+                target[user_input] = 0.5
+
+            # Update the engine's internal palette record
+            engine.current_palette = target
+
+            latency_ms = (time.perf_counter() - t_start) * 1000
+            print(
+                f"🎚️  Steering → {palette_display(target)}  "
+                f"[Mistral latency: {latency_ms:.0f}ms]",
+                flush=True,
+            )
+
+            # Crossfade: send interpolated weights in N steps over crossfade_secs
+            n_steps = max(2, args.steps)
+            step_sleep = args.crossfade / n_steps
+
+            for i in range(1, n_steps + 1):
+                if stop_event.is_set():
+                    break
+                t = i / n_steps
+                mid = interpolate_palettes(src_palette, target, t)
+                set_palette(mid)
+                await session.set_weighted_prompts(
+                    prompts=palette_to_weighted_prompts(mid)
+                )
+                await asyncio.sleep(step_sleep)
+
+            # Snap to final target
+            set_palette(target)
+            await session.set_weighted_prompts(
+                prompts=palette_to_weighted_prompts(target)
+            )
+
+    # --- Status display ---
     async def status_display():
         start_time = time.time()
         while not stop_event.is_set():
             elapsed = time.time() - start_time
             buf_secs = audio_buf.available / (SAMPLE_RATE * BYTES_PER_FRAME)
             mins, secs = divmod(int(elapsed), 60)
+            pal = get_palette()
             print(
-                f"  ▶ Playing [{mins:02d}:{secs:02d}]  "
-                f"Buffer: {buf_secs:.1f}s  "
-                f"Prompt: \"{current_prompt}\"    ",
+                f"  ▶ [{mins:02d}:{secs:02d}]  Buffer:{buf_secs:.1f}s  "
+                f"Palette: {palette_display(pal)}    ",
                 end="\r",
                 flush=True,
             )
             await asyncio.sleep(1.0)
 
-    # --- Launch everything ---
+    # --- Launch ---
     print(f"🎵  Live AI DJ — Starting with: \"{initial_prompt}\"")
+    print(f"    Mistral model : {MISTRAL_MODEL}")
+    print(f"    Temperature   : {args.temperature}")
+    print(f"    Guidance      : {args.guidance}")
+    print(f"    Crossfade     : {args.crossfade}s over {args.steps} steps")
     print("    Connecting to Lyria RealTime …\n")
 
     loop = asyncio.get_event_loop()
-
-    # Start terminal input reader thread
     input_thread = threading.Thread(
         target=input_reader, args=(prompt_queue, loop), daemon=True
     )
@@ -216,40 +447,37 @@ async def live_dj(initial_prompt: str) -> None:
 
     try:
         async with (
-            client.aio.live.music.connect(model=MODEL) as session,
+            lyria_client.aio.live.music.connect(model=MODEL) as session,
             asyncio.TaskGroup() as tg,
         ):
             # Set initial prompt
             await session.set_weighted_prompts(
-                prompts=[
-                    types.WeightedPrompt(text=initial_prompt, weight=1.0),
-                ]
+                prompts=[types.WeightedPrompt(text=initial_prompt, weight=1.0)]
             )
 
-            # Set generation config — QUALITY mode for best results
+            # Set generation config
             await session.set_music_generation_config(
                 config=types.LiveMusicGenerationConfig(
-                    temperature=1.0,
+                    temperature=args.temperature,
+                    guidance=args.guidance,
                 )
             )
 
-            # Start streaming from Lyria
             await session.play()
 
-            # Launch async tasks
             tg.create_task(receive_audio(session))
-            tg.create_task(prompt_handler(session))
+            tg.create_task(steering_handler(session))
             tg.create_task(status_display())
 
-            # Wait for pre-buffer to fill before starting audio output
             print("    Buffering …", end="\r", flush=True)
             while not playback_started.is_set():
                 await asyncio.sleep(0.05)
 
-            print("    🔊 Playback started! Type a new prompt and press Enter to steer the music.")
+            print("    🔊 Playback started!")
+            print("    Type a steering instruction and press Enter.")
+            print("    Examples: \"more energy\" / \"add jazz piano\" / \"slow it down\" / \"only ambient\"\n")
             print("    Press Ctrl+C to stop.\n")
 
-            # Open sounddevice stream and keep it running
             with sd.OutputStream(
                 samplerate=SAMPLE_RATE,
                 channels=CHANNELS,
@@ -257,7 +485,6 @@ async def live_dj(initial_prompt: str) -> None:
                 blocksize=BLOCK_SIZE,
                 callback=audio_callback,
             ):
-                # Run forever until Ctrl+C
                 while True:
                     await asyncio.sleep(0.5)
 
@@ -268,15 +495,47 @@ async def live_dj(initial_prompt: str) -> None:
         print("\n\n🛑  Stopped. Thanks for listening!")
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 def main() -> None:
-    if len(sys.argv) < 2:
-        print('Usage: python music_generation.py "<initial music prompt>"')
-        print('Example: python music_generation.py "chill lo-fi beats"')
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Live AI DJ with progressive prompt steering (Lyria + Mistral)"
+    )
+    parser.add_argument(
+        "prompt",
+        nargs="+",
+        help="Initial music prompt (e.g. \"techno rave\")",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Lyria generation temperature 0.5–2.0 (default: 1.0)",
+    )
+    parser.add_argument(
+        "--guidance",
+        type=float,
+        default=3.0,
+        help="Lyria prompt guidance strength 1.0–6.0 (default: 3.0)",
+    )
+    parser.add_argument(
+        "--crossfade",
+        type=float,
+        default=3.0,
+        help="Seconds to crossfade between palette states (default: 3.0)",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=6,
+        help="Number of interpolation steps in a crossfade (default: 6)",
+    )
+    args = parser.parse_args()
+    initial_prompt = " ".join(args.prompt)
 
-    prompt = " ".join(sys.argv[1:])
     try:
-        asyncio.run(live_dj(prompt))
+        asyncio.run(live_dj(initial_prompt, args))
     except KeyboardInterrupt:
         print("\n🛑  Stopped. Thanks for listening!")
 
