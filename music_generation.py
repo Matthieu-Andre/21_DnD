@@ -554,6 +554,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     print(f"    Mistral model : {MISTRAL_MODEL}")
     print(f"    Temperature   : {args.temperature}")
     print(f"    Guidance      : {args.guidance}")
+    print(f"    Seed          : {args.seed if args.seed is not None else 'random'}")
     print(f"    Crossfade     : {args.crossfade}s over {args.steps} steps")
     print("    Connecting to Lyria RealTime …\n")
 
@@ -578,6 +579,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                 config=types.LiveMusicGenerationConfig(
                     temperature=args.temperature,
                     guidance=args.guidance,
+                    seed=args.seed,
                 )
             )
 
@@ -648,6 +650,12 @@ def main() -> None:
         type=int,
         default=2,
         help="Number of interpolation steps in a crossfade (default: 2)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible generation (default: 42)",
     )
     args = parser.parse_args()
     initial_prompt = " ".join(args.prompt)
