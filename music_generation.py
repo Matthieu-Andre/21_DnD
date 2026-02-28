@@ -48,6 +48,32 @@ except ImportError:
 # ---------------------------------------------------------------------------
 load_dotenv()
 
+# Enable ANSI escape codes on Windows (Windows 10 v1511+ supports VT100)
+if sys.platform == "win32":
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+
+# ---------------------------------------------------------------------------
+# Terminal UI helpers — ANSI colours + line-safe print
+# ---------------------------------------------------------------------------
+class C:
+    """ANSI colour codes (Windows 10+ / any modern terminal)."""
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    # Functional colours
+    STATUS  = "\033[90m"          # dark grey  → status ticker
+    VOICE   = "\033[96m"          # cyan        → voice / STT
+    THINK   = "\033[93m"          # yellow      → Mistral thinking
+    APPLIED = "\033[92m"          # green       → change applied!
+    WARN    = "\033[91m"          # red         → errors / warnings
+    INFO    = "\033[94m"          # blue        → info / startup
+    DIM     = "\033[2m"           # dim         → secondary details
+
+# Clears the \r status line then prints a full line — prevents overlap.
+def ui_print(color: str, prefix: str, msg: str, **kw) -> None:
+    print(f"\r{' ' * 100}\r{color}{prefix}{C.RESET} {msg}", **kw)
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise EnvironmentError("GOOGLE_API_KEY not found in .env")
@@ -293,7 +319,7 @@ GOOD: [{{"text": "techno", "weight": 0.2}}, {{"text": "medieval folk", "weight":
         into concrete musical descriptors that Lyria understands.
         Called once at startup — synchronous.
         """
-        print("    🧬 Translating scene to musical DNA via Mistral…", end=" ", flush=True)
+        print(f"    {C.INFO}🧬 Translating scene to musical DNA via Mistral…{C.RESET}", end=" ", flush=True)
         try:
             resp = mistral_client.chat.complete(
                 model=MISTRAL_MODEL,
@@ -316,10 +342,10 @@ GOOD: [{{"text": "techno", "weight": 0.2}}, {{"text": "medieval folk", "weight":
                 if e.get("text") and float(e.get("weight", 0)) > 0
             }
             if palette:
-                print("done")
+                print(f"{C.APPLIED}done{C.RESET}")
                 return palette
         except Exception as exc:
-            print(f"failed ({exc})")
+            print(f"{C.WARN}failed ({exc}){C.RESET}")
         # Fallback: use raw description as single prompt
         return {scene_description: 1.0}
 
@@ -398,7 +424,7 @@ GOOD: [{{"text": "techno", "weight": 0.2}}, {{"text": "medieval folk", "weight":
             # Rollback the failed user message from history
             if self.history and self.history[-1]["role"] == "user":
                 self.history.pop()
-            print(f"\n⚠️  Mistral steering failed ({exc}), applying prompt directly.")
+            ui_print(C.WARN, "⚠️ ", f"Mistral steering failed ({exc}), applying prompt directly.")
             return None
 
 
@@ -459,7 +485,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         if args.guidance == 3.0:   # still at default — user didn’t touch it
             args.guidance = 2.0
 
-    print(f"    🎼 Musical DNA: {palette_display(initial_palette)}")
+    print(f"    {C.INFO}🎼 Musical DNA:{C.RESET} {palette_display(initial_palette)}")
 
     engine = SteeringEngine(initial_palette)
     # Shared palette (read by status display, written by steering handler)
@@ -503,7 +529,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             except asyncio.TimeoutError:
                 continue
 
-            print(f"\n🧠  Mistral analysing: \"{user_input}\" …", flush=True)
+            ui_print(C.THINK, "🧠", f"Mistral analysing: \"{user_input}\" …", flush=True)
             t_start = time.perf_counter()
 
             src_palette = get_palette()
@@ -520,9 +546,9 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             engine.current_palette = target
 
             latency_ms = (time.perf_counter() - t_start) * 1000
-            print(
-                f"🎚️  Steering → {palette_display(target)}  "
-                f"[Mistral latency: {latency_ms:.0f}ms]",
+            ui_print(
+                C.THINK, "🎚️",
+                f"New palette → {palette_display(target)}  {C.DIM}[{latency_ms:.0f}ms]{C.RESET}",
                 flush=True,
             )
 
@@ -548,6 +574,8 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             await session.set_weighted_prompts(
                 prompts=palette_to_weighted_prompts(target)
             )
+            # ✅ Confirm the change took effect
+            ui_print(C.APPLIED, "✅", f"{C.BOLD}Applied!{C.RESET} Music is now being steered towards: {palette_display(target)}", flush=True)
 
     # --- Status display ---
     async def status_display():
@@ -557,12 +585,13 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             buf_secs = audio_buf.available / (SAMPLE_RATE * BYTES_PER_FRAME)
             mins, secs = divmod(int(elapsed), 60)
             pal = get_palette()
-            print(
-                f"  ▶ [{mins:02d}:{secs:02d}]  Buffer:{buf_secs:.1f}s  "
-                f"Palette: {palette_display(pal)}    ",
-                end="\r",
-                flush=True,
+            line = (
+                f"{C.STATUS}  ▶ [{mins:02d}:{secs:02d}]  "
+                f"Buf:{buf_secs:.1f}s  "
+                f"{C.DIM}Palette: {palette_display(pal)}{C.RESET}    "
             )
+            # Pad to terminal width so previous longer lines are fully erased
+            print(line, end="\r", flush=True)
             await asyncio.sleep(1.0)
 
     # --- Voice listener (Voxtral real-time STT) ---
@@ -589,7 +618,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         SILENCE_MIN_CHARS = 3
 
         # ── Startup mic test ──────────────────────────────────────────────
-        print("\n🎤  Testing microphone…", flush=True)
+        ui_print(C.VOICE, "🎤", "Testing microphone…", flush=True)
         try:
             _p = pyaudio.PyAudio()
             _chunk = int(STT_SAMPLE_RATE * STT_CHUNK_MS / 1000)
@@ -598,10 +627,10 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                           frames_per_buffer=_chunk)
             _st.read(_chunk, exception_on_overflow=False)   # one test read
             _st.stop_stream(); _st.close(); _p.terminate()
-            print("    ✅  Microphone OK", flush=True)
+            ui_print(C.APPLIED, "✅", "Microphone OK", flush=True)
         except Exception as exc:
-            print(f"\n❌  Could not open microphone: {exc}", flush=True)
-            print("    Voice input disabled. Continue with keyboard only.", flush=True)
+            ui_print(C.WARN, "❌", f"Could not open microphone: {exc}", flush=True)
+            ui_print(C.WARN, "  ", "Voice input disabled. Continue with keyboard only.", flush=True)
             return
 
         # ── Mic async generator ───────────────────────────────────────────
@@ -626,8 +655,20 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         stt_client = Mistral(api_key=MISTRAL_API_KEY)
         audio_fmt  = AudioFormat(encoding="pcm_s16le", sample_rate=STT_SAMPLE_RATE)
         buf: list[str] = []
+        last_delta_time: float = 0.0
+        FLUSH_TIMEOUT = 2.5   # seconds without a new delta → force-flush
 
-        print("\n🎤  Connecting to Voxtral realtime…", flush=True)
+        async def flush_buf():
+            """Send whatever is in buf to the steering queue, then clear it."""
+            text = "".join(buf).strip()
+            buf.clear()
+            if len(text) >= SILENCE_MIN_CHARS:
+                ui_print(C.VOICE, "🎤", f"{C.BOLD}Voice command:{C.RESET} \"{text}\"", flush=True)
+                prompt_queue.put_nowait(text)
+            else:
+                print("", flush=True)
+
+        ui_print(C.VOICE, "🎤", "Connecting to Voxtral realtime…", flush=True)
         try:
             async for event in stt_client.audio.realtime.transcribe_stream(
                 audio_stream=iter_mic(),
@@ -637,39 +678,39 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                 if stop_event.is_set():
                     break
                 if isinstance(event, RealtimeTranscriptionSessionCreated):
-                    # \n first to escape the \r status line
-                    print("\n    📡  Voxtral ready — speak to steer the music!", flush=True)
+                    ui_print(C.APPLIED, "📡", "Voxtral ready — speak to steer the music!", flush=True)
                 elif isinstance(event, TranscriptionStreamTextDelta):
                     buf.append(event.text)
-                    # \n clears whatever \r the status display left behind
-                    print(f"\n🎤  Hearing: {''.join(buf)[-80:]}   ", end="", flush=True)
+                    last_delta_time = time.monotonic()
+                    joined = "".join(buf)
+                    # Overwrite the same line while the user is still speaking
+                    print(f"\r{C.VOICE}🎤 Hearing:{C.RESET} {joined[-80:]}   ", end="", flush=True)
+                    # Flush immediately on sentence-ending punctuation
+                    if joined.rstrip().endswith((".", "!", "?", "…")):
+                        await flush_buf()
                 elif isinstance(event, TranscriptionStreamDone):
-                    text = "".join(buf).strip()
-                    buf.clear()
-                    if len(text) >= SILENCE_MIN_CHARS:
-                        print(f"\n🎤  ✓ Sending: \"{text}\"", flush=True)
-                        prompt_queue.put_nowait(text)
-                    else:
-                        print("", flush=True)   # blank to close partial line
+                    await flush_buf()
                 elif isinstance(event, RealtimeTranscriptionError):
-                    print(f"\n⚠️  STT error: {event}", flush=True)
+                    ui_print(C.WARN, "⚠️ ", f"STT error: {event}", flush=True)
                 elif isinstance(event, UnknownRealtimeEvent):
-                    pass
+                    # Time-based flush: if we have text but no new delta for FLUSH_TIMEOUT
+                    if buf and last_delta_time and (time.monotonic() - last_delta_time) > FLUSH_TIMEOUT:
+                        await flush_buf()
         except Exception as exc:
             if not stop_event.is_set():
-                print(f"\n❌  Voice listener crashed: {exc}", flush=True)
+                ui_print(C.WARN, "❌", f"Voice listener crashed: {exc}", flush=True)
                 traceback.print_exc()
 
 
     # --- Launch ---
-    print(f"🎵  Live AI DJ — Starting with: \"{initial_prompt}\"")
-    print(f"    Mistral model : {MISTRAL_MODEL}")
+    print(f"{C.INFO}{C.BOLD}🎵  Live AI DJ{C.RESET}  starting with: \"{initial_prompt}\"")
+    print(f"{C.DIM}    Mistral model : {MISTRAL_MODEL}")
     print(f"    Mode          : {'Ambient / RPG landscape' if args.ambient else 'Full music'}")
     print(f"    Temperature   : {args.temperature}")
     print(f"    Guidance      : {args.guidance}")
     print(f"    Seed          : {args.seed if args.seed is not None else 'random'}")
-    print(f"    Crossfade     : {args.crossfade}s over {args.steps} steps")
-    print("    Connecting to Lyria RealTime …\n")
+    print(f"    Crossfade     : {args.crossfade}s over {args.steps} steps{C.RESET}")
+    print(f"    {C.INFO}Connecting to Lyria RealTime …{C.RESET}\n")
 
     loop = asyncio.get_event_loop()
     input_thread = threading.Thread(
@@ -707,14 +748,14 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             if args.voice:
                 tg.create_task(voice_listener())
 
-            print("    Buffering …", end="\r", flush=True)
+            print(f"    {C.DIM}Buffering …{C.RESET}", end="\r", flush=True)
             while not playback_started.is_set():
                 await asyncio.sleep(0.05)
 
-            print("    🔊 Playback started!")
-            print("    Type a steering instruction and press Enter.")
-            print("    Examples: \"more energy\" / \"add jazz piano\" / \"slow it down\" / \"only ambient\"\n")
-            print("    Press Ctrl+C to stop.\n")
+            print(f"\n{C.APPLIED}{C.BOLD}    🔊 Playback started!{C.RESET}")
+            print(f"{C.DIM}    Type a steering instruction and press Enter.")
+            print(f"    Examples: \"more energy\" / \"add jazz piano\" / \"slow it down\" / \"only ambient\"")
+            print(f"    Press Ctrl+C to stop.{C.RESET}\n")
 
             with sd.OutputStream(
                 samplerate=SAMPLE_RATE,
@@ -730,7 +771,7 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
         pass
     finally:
         stop_event.set()
-        print("\n\n🛑  Stopped. Thanks for listening!")
+        print(f"\n\n{C.WARN}{C.BOLD}🛑  Stopped.{C.RESET} Thanks for listening!")
 
 
 # ---------------------------------------------------------------------------
