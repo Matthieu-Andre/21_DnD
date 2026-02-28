@@ -203,90 +203,141 @@ class SteeringEngine:
     has context on how the session has evolved.
     """
 
+    # Prompt used ONCE at startup to convert any scene/narrative description
+    # into concrete Lyria-compatible musical descriptors.
+    DNA_PROMPT = """You are a music expert. Translate any scene, image, mood, or narrative description
+into a JSON array of musical descriptors that a music generation AI can use.
+
+Rules:
+- Use only concrete musical terms: genre, instruments, tempo, mood, texture.
+- No narrative language (no 'knights', 'forest', 'battle' — translate those into music).
+- Return 2-5 entries. Weights should sum to roughly 3.0.
+- RAW JSON ONLY — no markdown, no explanation.
+
+Examples:
+Input: "a group of knights hiking in a peaceful field"
+Output: [{"text": "medieval folk", "weight": 1.0}, {"text": "acoustic lute and flute", "weight": 0.8}, {"text": "moderate peaceful tempo", "weight": 0.7}, {"text": "pastoral mood", "weight": 0.5}]
+
+Input: "spaceship launching into space"
+Output: [{"text": "cinematic orchestral", "weight": 1.0}, {"text": "epic brass section", "weight": 0.8}, {"text": "fast building tempo", "weight": 0.7}, {"text": "dramatic tension", "weight": 0.5}]
+
+Input: "techno rave"
+Output: [{"text": "techno", "weight": 1.2}, {"text": "driving bassline", "weight": 0.9}, {"text": "fast tempo 140 BPM", "weight": 0.7}, {"text": "repetitive synth loop", "weight": 0.5}]
+"""
+
     SYSTEM_PROMPT = f"""You are an expert AI DJ assistant controlling a real-time music generation system (Google Lyria RealTime).
 
 {LYRIA_REFERENCE_TABLE}
 
 ## Your ONLY job
-Given the CURRENT PALETTE and a USER INSTRUCTION, return a JSON array of
-{{\"text\": str, \"weight\": float}} representing the ADJUSTED palette.
+Given the CURRENT PALETTE, the DNA ANCHORS, and a USER INSTRUCTION,
+return a JSON array of {{\"text\": str, \"weight\": float}} representing the ADJUSTED palette.
 Respond with RAW JSON ONLY — no markdown, no explanation.
 
-## THE GOLDEN RULE: Musical DNA Must Survive
-The current palette encodes the musical identity of the session (genre, instruments, mood).
-Every steering instruction is an ADJUSTMENT, not a rewrite.
-
-Dominating prompts (weight ≥ 0.5) are ANCHORS — they must appear in your output
-unless the user EXPLICITLY says to stop, remove, or switch genre entirely.
+## THE GOLDEN RULE: DNA Anchors Must Survive
+DNA ANCHORS are the core musical identity of this session. They are listed in every message.
+They MUST appear in your output at their anchor weight (±0.3 is fine for evolution).
+The ONLY exception: user EXPLICITLY says to stop/remove/change genre (Class C instruction).
 
 ## How to classify an instruction
 
 ### Class A — Narrative / scene evolution (most common)
-The user describes what is HAPPENING in the scene. The music should evolve
-to match the new energy/mood while staying in the same musical world.
-→ Strategy: Keep all anchors. Adjust tempo/energy/intensity prompts only.
-→ Examples: "knight gets on a horse", "the battle begins", "tension rises",
-           "more energy", "he finds treasure", "they celebrate"
+The user describes what is HAPPENING. Stay in the same musical world, evolve energy/tempo.
+→ Keep all DNA anchors at their weights. Add/adjust secondary prompts only.
+→ Examples: "knight gets on a horse", "tension rises", "more energy", "they celebrate"
 
 ### Class B — Direct musical tweak
 The user explicitly names a musical element to change.
-→ Strategy: Adjust that element; keep everything else.
+→ Adjust that element; keep all DNA anchors.
 → Examples: "more bass", "add piano", "slower tempo", "louder drums"
 
 ### Class C — Explicit genre/style change
-The user EXPLICITLY asks to switch to a different genre or start fresh.
-→ Strategy: Transition — reduce anchors to 0.3 while boosting the new style.
-→ Examples: "switch to jazz", "make it electronic now", "go full metal",
-           "stop the medieval stuff", "completely different vibe"
+The user EXPLICITLY asks to switch genre or start fresh.
+→ Reduce DNA anchor weights to 0.2 and boost new style.
+→ Examples: "switch to jazz", "go full metal", "completely different vibe"
 
 ## Worked examples
 
-EXAMPLE 1 — Narrative evolution (Class A)
-Current palette: [{{"text": "medieval folk", "weight": 1.0}},
-                  {{"text": "calm countryside", "weight": 0.8}}]
+EXAMPLE 1 — Class A (narrative)
+DNA Anchors: [{{"text": "medieval folk", "weight": 1.0}}, {{"text": "acoustic lute", "weight": 0.8}}]
+Current palette: [{{"text": "medieval folk", "weight": 1.0}}, {{"text": "acoustic lute", "weight": 0.8}}, {{"text": "pastoral mood", "weight": 0.5}}]
 User: "the knight gets on his horse and starts galloping"
-BAD output: [{{"text": "galloping hooves", "weight": 1.0}}, {{"text": "battle drums", "weight": 0.8}}]
-  ← WRONG: wiped the medieval identity entirely
-GOOD output: [{{"text": "medieval folk", "weight": 1.0}},
-              {{"text": "calm countryside", "weight": 0.4}},
-              {{"text": "faster tempo", "weight": 0.7}},
-              {{"text": "epic orchestral swell", "weight": 0.6}}]
-  ← RIGHT: medieval stays dominant, energy/tempo are added on top
+BAD: [{{"text": "galloping hooves", "weight": 1.0}}, {{"text": "battle drums", "weight": 0.8}}]  ← WRONG: wiped DNA
+GOOD: [{{"text": "medieval folk", "weight": 1.0}}, {{"text": "acoustic lute", "weight": 0.7}}, {{"text": "faster tempo", "weight": 0.8}}, {{"text": "epic momentum", "weight": 0.6}}]
 
-EXAMPLE 2 — Direct tweak (Class B)
-Current palette: [{{"text": "techno rave", "weight": 1.0}}, {{"text": "driving bassline", "weight": 0.8}}]
+EXAMPLE 2 — Class B
+DNA Anchors: [{{"text": "techno", "weight": 1.2}}, {{"text": "driving bassline", "weight": 0.9}}]
 User: "more energy"
-GOOD output: [{{"text": "techno rave", "weight": 1.2}},
-              {{"text": "driving bassline", "weight": 1.0}},
-              {{"text": "high energy", "weight": 0.6}}]
+GOOD: [{{"text": "techno", "weight": 1.3}}, {{"text": "driving bassline", "weight": 1.0}}, {{"text": "high energy", "weight": 0.6}}]
 
-EXAMPLE 3 — Explicit change (Class C)
-Current palette: [{{"text": "techno rave", "weight": 1.0}}]
-User: "switch to medieval folk music now"
-GOOD output: [{{"text": "techno rave", "weight": 0.3}},
-              {{"text": "medieval folk", "weight": 1.2}},
-              {{"text": "acoustic instruments", "weight": 0.8}}]
+EXAMPLE 3 — Class C
+DNA Anchors: [{{"text": "techno", "weight": 1.2}}]
+User: "switch to medieval folk now"
+GOOD: [{{"text": "techno", "weight": 0.2}}, {{"text": "medieval folk", "weight": 1.2}}, {{"text": "acoustic instruments", "weight": 0.8}}]
 """
 
-    def __init__(self, initial_prompt: str):
+    def __init__(self, initial_palette: dict[str, float]):
         self.history: list[dict] = []
-        self.current_palette: dict[str, float] = {initial_prompt: 1.0}
-        # Anchors are the dominant prompts from the PREVIOUS step.
-        # Used to enforce continuity if Mistral silently drops them.
-        self._prev_anchors: dict[str, float] = {initial_prompt: 1.0}
+        self.current_palette: dict[str, float] = dict(initial_palette)
+        # DNA anchors = core musical identity, never auto-dropped.
+        # These are set once from the translated initial prompt and persist
+        # across ALL rounds unless the user explicitly asks for a genre change.
+        self._dna_anchors: dict[str, float] = dict(initial_palette)
+
+    @classmethod
+    def translate_scene_to_palette(
+        cls, scene_description: str
+    ) -> dict[str, float]:
+        """
+        Use Mistral to convert a raw user description (scene, mood, narrative)
+        into concrete musical descriptors that Lyria understands.
+        Called once at startup — synchronous.
+        """
+        print("    🧬 Translating scene to musical DNA via Mistral…", end=" ", flush=True)
+        try:
+            resp = mistral_client.chat.complete(
+                model=MISTRAL_MODEL,
+                messages=[
+                    {"role": "system", "content": cls.DNA_PROMPT},
+                    {"role": "user", "content": scene_description},
+                ],
+                max_tokens=200,
+                temperature=0.3,
+            )
+            raw = resp.choices[0].message.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            entries = json.loads(raw.strip())
+            palette = {
+                e["text"]: float(e["weight"])
+                for e in entries
+                if e.get("text") and float(e.get("weight", 0)) > 0
+            }
+            if palette:
+                print("done")
+                return palette
+        except Exception as exc:
+            print(f"failed ({exc})")
+        # Fallback: use raw description as single prompt
+        return {scene_description: 1.0}
 
     def _palette_to_str(self) -> str:
         items = [{"text": t, "weight": w} for t, w in self.current_palette.items()]
         return json.dumps(items)
 
-    def _enforce_continuity(self, new_palette: dict[str, float]) -> dict[str, float]:
-        """Safety net: restore any anchor (weight ≥ 0.5) silently dropped by Mistral."""
+    def _dna_to_str(self) -> str:
+        items = [{"text": t, "weight": w} for t, w in self._dna_anchors.items()]
+        return json.dumps(items)
+
+    def _enforce_dna(self, new_palette: dict[str, float]) -> dict[str, float]:
+        """Always re-inject DNA anchors if Mistral silently dropped them."""
         result = dict(new_palette)
-        for text, weight in self._prev_anchors.items():
+        for text, weight in self._dna_anchors.items():
             if text not in result:
-                # Restore at 40 % of its former strength — enough to stay
-                # musically present without dominating the new direction.
-                result[text] = round(weight * 0.4, 3)
+                # Restore at 60 % — strong enough to be heard, won't dominate new direction
+                result[text] = round(weight * 0.6, 3)
         return result
 
     async def steer(self, user_instruction: str) -> Optional[dict[str, float]]:
@@ -295,6 +346,7 @@ GOOD output: [{{"text": "techno rave", "weight": 0.3}},
         Returns None on failure (caller should skip the update gracefully).
         """
         user_content = (
+            f"DNA Anchors (must survive): {self._dna_to_str()}\n"
             f"Current palette: {self._palette_to_str()}\n"
             f"User instruction: {user_instruction}"
         )
@@ -334,11 +386,8 @@ GOOD output: [{{"text": "techno rave", "weight": 0.3}},
             if not new_palette:
                 raise ValueError("Empty palette returned")
 
-            # Enforce continuity — restore silently dropped anchors
-            new_palette = self._enforce_continuity(new_palette)
-
-            # Update anchors to current dominant prompts for next round
-            self._prev_anchors = {t: w for t, w in new_palette.items() if w >= 0.5}
+            # Always re-inject DNA anchors if Mistral silently dropped them
+            new_palette = self._enforce_dna(new_palette)
 
             # Store the assistant response in history for context continuity
             self.history.append({"role": "assistant", "content": raw})
@@ -392,10 +441,14 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     playback_started = threading.Event()
     stop_event = asyncio.Event()
 
-    engine = SteeringEngine(initial_prompt)
+    # Step 1: translate scene/narrative into musical DNA using Mistral
+    initial_palette = SteeringEngine.translate_scene_to_palette(initial_prompt)
+    print(f"    🎼 Musical DNA: {palette_display(initial_palette)}")
+
+    engine = SteeringEngine(initial_palette)
     # Shared palette (read by status display, written by steering handler)
     palette_lock = threading.Lock()
-    current_palette: dict[str, float] = {initial_prompt: 1.0}
+    current_palette: dict[str, float] = dict(initial_palette)
 
     def get_palette() -> dict[str, float]:
         with palette_lock:
@@ -515,9 +568,9 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             lyria_client.aio.live.music.connect(model=MODEL) as session,
             asyncio.TaskGroup() as tg,
         ):
-            # Set initial prompt
+            # Set initial musical DNA palette
             await session.set_weighted_prompts(
-                prompts=[types.WeightedPrompt(text=initial_prompt, weight=1.0)]
+                prompts=palette_to_weighted_prompts(initial_palette)
             )
 
             # Set generation config
