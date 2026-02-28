@@ -394,22 +394,24 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
                 flush=True,
             )
 
-            # Crossfade: send interpolated weights in N steps over crossfade_secs
-            n_steps = max(2, args.steps)
-            step_sleep = args.crossfade / n_steps
+            # Apply the target palette — instant by default (crossfade=0).
+            # Lyria's model does its own internal smoothing, so snapping is fine.
+            # Optional crossfade loop for those who want a slow morph.
+            if args.crossfade > 0:
+                n_steps = max(2, args.steps)
+                step_sleep = args.crossfade / n_steps
+                for i in range(1, n_steps + 1):
+                    if stop_event.is_set():
+                        break
+                    t = i / n_steps
+                    mid = interpolate_palettes(src_palette, target, t)
+                    set_palette(mid)
+                    await session.set_weighted_prompts(
+                        prompts=palette_to_weighted_prompts(mid)
+                    )
+                    await asyncio.sleep(step_sleep)
 
-            for i in range(1, n_steps + 1):
-                if stop_event.is_set():
-                    break
-                t = i / n_steps
-                mid = interpolate_palettes(src_palette, target, t)
-                set_palette(mid)
-                await session.set_weighted_prompts(
-                    prompts=palette_to_weighted_prompts(mid)
-                )
-                await asyncio.sleep(step_sleep)
-
-            # Snap to final target
+            # Snap to final target (always runs — also acts as the single call when crossfade=0)
             set_palette(target)
             await session.set_weighted_prompts(
                 prompts=palette_to_weighted_prompts(target)
@@ -522,14 +524,14 @@ def main() -> None:
     parser.add_argument(
         "--crossfade",
         type=float,
-        default=3.0,
-        help="Seconds to crossfade between palette states (default: 3.0)",
+        default=0.0,
+        help="Seconds to crossfade between palette states (default: 0 = instant)",
     )
     parser.add_argument(
         "--steps",
         type=int,
-        default=6,
-        help="Number of interpolation steps in a crossfade (default: 6)",
+        default=2,
+        help="Number of interpolation steps in a crossfade (default: 2)",
     )
     args = parser.parse_args()
     initial_prompt = " ".join(args.prompt)
