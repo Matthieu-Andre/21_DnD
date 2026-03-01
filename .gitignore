@@ -3,7 +3,5 @@ __pycache__/
 *.pyc
 *.wav
 transcription.txt
-*.txt
-!requirements.txt
 live_sessions/**
 live_sessions_test/**

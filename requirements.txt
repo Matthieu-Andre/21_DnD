@@ -1,1 +1,6 @@
--r requirements-web.txt
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+mistralai
+strands-agents[mistral]
