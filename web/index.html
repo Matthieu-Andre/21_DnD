@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DnD Scene Listener</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="shell" id="shell" data-mood="default">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Adaptive soundtracking for tabletop scenes</p>
+        <h1>Audio Scene Listener</h1>
+      </div>
+      <div class="topbar-meta">
+        <span class="status-pill" id="engine-pill">Idle</span>
+        <button class="ghost-button" id="refresh-button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="hero-card">
+        <div class="hero-copy">
+          <p class="subtitle" id="subtitle">Standing by for a live session.</p>
+          <div class="status-banner" id="status-banner">No live transcription is running. The ring is animating in demo mode.</div>
+        </div>
+
+        <div class="control-row">
+          <label class="control">
+            <span>API base URL</span>
+            <input id="api-base-input" type="text" value="" placeholder="Blank = same origin">
+          </label>
+
+          <label class="control">
+            <span>Language hint</span>
+            <input id="language-input" type="text" value="fr" maxlength="12" placeholder="fr or en">
+          </label>
+
+          <label class="control">
+            <span>Chunk seconds</span>
+            <input id="chunk-seconds-input" type="number" value="2.5" min="1" max="10" step="0.5">
+          </label>
+
+          <label class="control toggle-control">
+            <span>Mood agent</span>
+            <button class="ghost-button toggle-button active" id="mood-agent-toggle" type="button" aria-pressed="true">Enabled</button>
+          </label>
+        </div>
+
+        <div class="visualizer-shell">
+          <div class="visualizer-frame">
+            <div class="visualizer-aura"></div>
+            <svg class="visualizer-svg" id="visualizer-svg" viewBox="0 0 400 400" aria-hidden="true">
+              <defs>
+                <linearGradient id="ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="var(--ring-a)"></stop>
+                  <stop offset="58%" stop-color="var(--ring-b)"></stop>
+                  <stop offset="100%" stop-color="var(--ring-a)"></stop>
+                </linearGradient>
+              </defs>
+              <path class="perimeter-shadow" id="perimeter-shadow"></path>
+              <path class="perimeter-fill" id="perimeter-fill"></path>
+              <path class="perimeter-highlight" id="perimeter-highlight"></path>
+            </svg>
+
+            <button class="mic-button" id="session-toggle" type="button" aria-label="Start live session">
+              <span class="mic-button-icon" id="mic-button-icon">LIVE</span>
+              <span class="mic-button-label" id="mic-button-label">Start</span>
+            </button>
+
+            <div class="tooltip" id="tooltip">Start browser stream</div>
+          </div>
+        </div>
+
+        <div class="metric-strip">
+          <article class="metric-card">
+            <span class="metric-label">Current mood</span>
+            <strong class="metric-value" id="metric-mood">Default</strong>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Confidence</span>
+            <strong class="metric-value" id="metric-confidence">0%</strong>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Utterances</span>
+            <strong class="metric-value" id="metric-utterances">0</strong>
+          </article>
+        </div>
+
+        <footer class="tags" id="tags"></footer>
+      </section>
+
+      <section class="intel-card">
+        <div class="panel-block">
+          <div class="panel-heading">
+            <h2>Scene Mood</h2>
+            <p id="mood-reason">No mood classification yet.</p>
+          </div>
+          <div class="mood-grid" id="mood-grid"></div>
+        </div>
+
+        <div class="panel-block">
+          <div class="panel-heading">
+            <h2>Recent Utterances</h2>
+            <p>The last finalized lines captured by the backend.</p>
+          </div>
+          <div class="utterance-list" id="utterance-list"></div>
+        </div>
+
+        <div class="panel-block transcript-block">
+          <div class="panel-heading">
+            <h2>Transcript</h2>
+            <p id="transcript-meta">Live transcript will appear here.</p>
+          </div>
+          <div class="transcript-box" id="transcript-box"></div>
+        </div>
+
+        <div class="panel-block">
+          <div class="panel-heading">
+            <h2>Live Logs</h2>
+            <p>Recent output from the FastAPI ingestion pipeline.</p>
+          </div>
+          <pre class="log-box" id="log-box"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

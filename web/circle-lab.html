@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circle Lab</title>
+  <style>
+    :root {
+      --bg: #f3ede2;
+      --panel: rgba(255, 250, 242, 0.84);
+      --line: rgba(45, 31, 23, 0.16);
+      --text: #2b1d15;
+      --muted: #776353;
+      --accent: #bc6c25;
+      --accent-soft: rgba(188, 108, 37, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      font-family: "SF Pro Text", "Helvetica Neue", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(188, 108, 37, 0.16), transparent 30%),
+        linear-gradient(180deg, #f7f1e7 0%, var(--bg) 100%);
+    }
+
+    main {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .lab {
+      width: min(920px, 100%);
+      display: grid;
+      gap: 20px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 24px 64px rgba(61, 40, 27, 0.08);
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(2rem, 5vw, 3.25rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.45);
+      color: var(--text);
+      font-size: 0.85rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .stage {
+      display: grid;
+      place-items: center;
+      min-height: 560px;
+      border-radius: 24px;
+      border: 1px solid rgba(45, 31, 23, 0.08);
+      background:
+        radial-gradient(circle at center, rgba(255, 255, 255, 0.5), transparent 55%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.08));
+      overflow: hidden;
+    }
+
+    svg {
+      width: min(78vw, 520px);
+      height: auto;
+      overflow: visible;
+    }
+
+    .trajectory {
+      fill: none;
+      stroke: rgba(24, 18, 14, 0.98);
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    @media (max-width: 720px) {
+      .lab {
+        padding: 18px;
+      }
+
+      .header {
+        flex-direction: column;
+        align-items: start;
+      }
+
+      .stage {
+        min-height: 420px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="lab">
+      <div class="header">
+        <div>
+          <h1>Circle Lab</h1>
+          <p>Standalone motion study for the future audio ring.</p>
+        </div>
+        <div class="badge" id="status-badge">Mic: Pending</div>
+      </div>
+
+      <div class="stage">
+        <svg viewBox="0 0 400 400" aria-label="Circle prototype">
+          <path class="trajectory" id="trace-path" d=""></path>
+        </svg>
+      </div>
+
+      <div class="footer">
+        <span>Current step: closed orbit reconstructed from signed microphone history.</span>
+        <span>Silence returns to the base circle; sound can push inward or outward.</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const centerX = 200;
+    const centerY = 200;
+    const radius = 128;
+    const orbitPeriodMs = 2000;
+    const lineMotionAmplitude = 500;
+    const sampleCount = 720;
+    const TAU = Math.PI * 2;
+    const baseDecay = 0.992;
+    const silenceDecay = 0.968;
+    const silenceThreshold = 0.018;
+    const tracePath = document.getElementById("trace-path");
+    const statusBadge = document.getElementById("status-badge");
+    const displacementSamples = new Array(sampleCount).fill(0);
+    let audioContext = null;
+    let analyser = null;
+    let timeDomainData = null;
+    let smoothedAmplitude = 0;
+
+    function midpoint(pointA, pointB) {
+      return {
+        x: (pointA.x + pointB.x) / 2,
+        y: (pointA.y + pointB.y) / 2,
+      };
+    }
+
+    function buildClosedPath(points) {
+      if (points.length < 3) {
+        return "";
+      }
+
+      const start = midpoint(points[points.length - 1], points[0]);
+      let path = `M ${start.x.toFixed(2)} ${start.y.toFixed(2)}`;
+
+      for (let index = 0; index < points.length; index += 1) {
+        const currentPoint = points[index];
+        const nextPoint = points[(index + 1) % points.length];
+        const currentMidpoint = midpoint(currentPoint, nextPoint);
+        path += ` Q ${currentPoint.x.toFixed(2)} ${currentPoint.y.toFixed(2)} ${currentMidpoint.x.toFixed(2)} ${currentMidpoint.y.toFixed(2)}`;
+      }
+
+      path += " Z";
+      return path;
+    }
+
+    function samplePosition(progress, displacement) {
+      const angle = progress * TAU - Math.PI / 2;
+      const anchorX = centerX + Math.cos(angle) * radius;
+      const anchorY = centerY + Math.sin(angle) * radius;
+      const normalX = Math.cos(angle);
+      const normalY = Math.sin(angle);
+
+      return {
+        x: anchorX + normalX * displacement * lineMotionAmplitude,
+        y: anchorY + normalY * displacement * lineMotionAmplitude,
+      };
+    }
+
+    function smoothDisplacementAt(index) {
+      const previousFar = displacementSamples[(index - 2 + sampleCount) % sampleCount] || 0;
+      const previousNear = displacementSamples[(index - 1 + sampleCount) % sampleCount] || 0;
+      const current = displacementSamples[index] || 0;
+      const nextNear = displacementSamples[(index + 1) % sampleCount] || 0;
+      const nextFar = displacementSamples[(index + 2) % sampleCount] || 0;
+
+      return (
+        previousFar * 0.08 +
+        previousNear * 0.22 +
+        current * 0.4 +
+        nextNear * 0.22 +
+        nextFar * 0.08
+      );
+    }
+
+    function buildLastRotationPoints(currentIndex) {
+      const points = [];
+
+      for (let step = 1; step <= sampleCount; step += 1) {
+        const sampleIndex = (currentIndex + step) % sampleCount;
+        const sampleProgress = sampleIndex / sampleCount;
+        points.push(samplePosition(sampleProgress, smoothDisplacementAt(sampleIndex)));
+      }
+
+      return points;
+    }
+
+    function sampleDisplacement(timestamp) {
+      if (analyser && timeDomainData) {
+        analyser.getFloatTimeDomainData(timeDomainData);
+
+        let signedPeak = 0;
+        for (let index = 0; index < timeDomainData.length; index += 1) {
+          const sample = timeDomainData[index];
+          if (Math.abs(sample) > Math.abs(signedPeak)) {
+            signedPeak = sample;
+          }
+        }
+
+        const gatedPeak = Math.abs(signedPeak) < 0.012 ? 0 : signedPeak;
+        const normalized = Math.max(-0.55, Math.min(0.55, gatedPeak * 2.2));
+        smoothedAmplitude = smoothedAmplitude * 0.84 + normalized * 0.16;
+        return smoothedAmplitude;
+      }
+
+      const demoAmplitude = Math.sin(timestamp / 180) * 0.28;
+      smoothedAmplitude = smoothedAmplitude * 0.86 + demoAmplitude * 0.14;
+      return smoothedAmplitude;
+    }
+
+    async function initializeMicrophone() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        statusBadge.textContent = "Mic: Unsupported";
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 1024;
+        timeDomainData = new Float32Array(analyser.fftSize);
+        source.connect(analyser);
+        statusBadge.textContent = "Mic: Live";
+
+        document.addEventListener("click", () => {
+          if (audioContext && audioContext.state === "suspended") {
+            audioContext.resume();
+          }
+        });
+      } catch (_error) {
+        statusBadge.textContent = "Mic: Demo";
+      }
+    }
+
+    function decayHistory(currentIndex, currentDisplacement) {
+      const decay = Math.abs(currentDisplacement) < silenceThreshold ? silenceDecay : baseDecay;
+
+      for (let index = 0; index < sampleCount; index += 1) {
+        if (index === currentIndex) {
+          continue;
+        }
+        displacementSamples[index] *= decay;
+        if (Math.abs(displacementSamples[index]) < 0.0008) {
+          displacementSamples[index] = 0;
+        }
+      }
+    }
+
+    function render(timestamp) {
+      const progress = (timestamp % orbitPeriodMs) / orbitPeriodMs;
+      const currentIndex = Math.floor(progress * sampleCount) % sampleCount;
+      const currentDisplacement = sampleDisplacement(timestamp);
+      displacementSamples[currentIndex] = currentDisplacement;
+      decayHistory(currentIndex, currentDisplacement);
+      tracePath.setAttribute("d", buildClosedPath(buildLastRotationPoints(currentIndex)));
+      requestAnimationFrame(render);
+    }
+
+    initializeMicrophone();
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>
