@@ -224,12 +224,11 @@ DEV_SCENES: dict[str, dict[str, float]] = {
         "cinematic": 1.0, "instrumental": 1.0,
     },
     "puzzle": {
-        "mysterious": 1.2, "subtle": 1.2, "detective": 1.2,
-        "investigation": 1.2, "thinking": 1.2,
-        "light piano motif": 0.9, "subtle pizzicato strings": 0.9,
-        "minimalist percussion": 0.9, "curiosity": 0.9,
-        "a sense of quiet thought": 0.9, "sparse plucked notes": 0.9,
-        "ambient": 1.0, "instrumental": 1.0,
+        "ambient": 1.2, "relaxing": 1.2, "lofi": 1.2,
+        "chill": 1.1, "focus": 1.1, "study music": 1.1,
+        "soft synths": 1.0, "subtle beat": 0.9,
+        "calm": 1.0, "atmosphere": 1.0, "smooth": 0.9,
+        "instrumental": 1.0, "gentle": 0.9,
     },
 }
 
@@ -251,7 +250,7 @@ Scene descriptions:
   victory          = won, victory, celebration, triumph, success, fanfare, defeated the boss, level up, loot
   paris_rain       = rain, night, city, jazz, noir, melancholy, sad, depressing, detective office, slow
   chase            = chase, pursuit, running, escape, fleeing, urgent, hurry, running away, chasing him
-  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation, looking for clues, reading ancient text"""
+  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation, coding, AI, artificial intelligence, hackathon, development, work, works, technical, intelligence, project"""
 
 
 def dev_to_palette(prompt: str) -> dict[str, float]:
@@ -472,15 +471,30 @@ async def voice_listener(
             if len(voice_memory) > 20:
                 voice_memory[:] = voice_memory[-20:]
 
-            new_scene = await asyncio.get_event_loop().run_in_executor(
-                None, dev_memory_to_scene, voice_memory, current_scene_holder[0]
-            )
-            if new_scene and new_scene != current_scene_holder[0]:
-                ui_print(C.APPLIED, "🎬", f'Scene shift: {current_scene_holder[0]} → {C.BOLD}{new_scene}{C.RESET}')
-                current_scene_holder[0] = new_scene
-                prompt_queue.put_nowait(f"__DEV_SCENE__{new_scene}")
-            else:
-                ui_print(C.DIM, "  ", f'Context unchanged — staying on {current_scene_holder[0]}')
+            loop = asyncio.get_event_loop()
+
+            async def do_sfx_analysis():
+                """Run SFX intent check concurrently."""
+                sfx_prompt = await analyze_sfx(text)
+                if sfx_prompt:
+                    # Spawn playback in a true background thread so it doesn't block async event loop
+                    threading.Thread(target=play_sfx, args=(sfx_prompt,), daemon=True).start()
+
+            async def do_scene_analysis():
+                new_scene = await loop.run_in_executor(
+                    None, dev_memory_to_scene, voice_memory, current_scene_holder[0]
+                )
+                if new_scene and new_scene != current_scene_holder[0]:
+                    ui_print(C.APPLIED, "🎬", f'Scene shift: {current_scene_holder[0]} → {C.BOLD}{new_scene}{C.RESET}')
+                    current_scene_holder[0] = new_scene
+                    prompt_queue.put_nowait(f"__DEV_SCENE__{new_scene}")
+                else:
+                    ui_print(C.DIM, "  ", f'Context unchanged — staying on {current_scene_holder[0]}')
+
+            # Run both analyzes concurrently
+            asyncio.create_task(do_sfx_analysis())
+            asyncio.create_task(do_scene_analysis())
+
         else:
             # Normal mode: send utterance directly
             prompt_queue.put_nowait(text)
@@ -571,6 +585,104 @@ Reply with ONLY the scene name. Nothing else."""
         if key in scene or scene in key:
             return key
     return current_scene
+
+
+# ---------------------------------------------------------------------------
+# ElevenLabs SFX Integration
+# ---------------------------------------------------------------------------
+async def analyze_sfx(utterance: str) -> str | None:
+    """Use Mistral JSON mode to decide if this utterance warrants a sound effect."""
+    from mistralai import Mistral as _Mistral
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        return None
+        
+    client = _Mistral(api_key=api_key)
+    system = """You extract explicit sound effect triggers from speech.
+Does the user's speech explicitly describe a specific event or action that makes a distinct sound? 
+(e.g., "a loud explosion", "door creaks open", "dragon screams", "glass shattering").
+Do NOT trigger on general moods, dialogue, abstract concepts, or continuous background noise.
+
+Respond ONLY in valid JSON with two fields:
+  "warrants_sfx" (boolean): true if a distinct sound effect must be played NOW.
+  "sfx_prompt" (string | null): a short, descriptive prompt for sound generation (e.g. "heavy wooden door creaking")."""
+
+    try:
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: client.chat.complete(
+                model="open-mistral-7b",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": utterance},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
+        )
+        import json
+        data = json.loads(resp.choices[0].message.content)
+        if data.get("warrants_sfx") and data.get("sfx_prompt"):
+            return str(data["sfx_prompt"])
+    except Exception as e:
+        ui_print(C.WARN, "⚠️ ", f"SFX analysis error: {e}")
+    return None
+
+
+def play_sfx(sfx_prompt: str):
+    """Generate SFX with ElevenLabs, decode with pydub, and play on a new sounddevice stream."""
+    try:
+        import sounddevice as sd
+        from pydub import AudioSegment
+        import io
+        from elevenlabs.client import ElevenLabs
+    except ImportError as e:
+        ui_print(C.WARN, "⚠️ ", f"Missing SFX dependency: {e} - pip install pydub sounddevice elevenlabs")
+        return
+
+    key = os.getenv("ELEVENLABS_API_KEY")
+    if not key:
+        ui_print(C.WARN, "⚠️ ", "ELEVENLABS_API_KEY missing - cannot play SFX")
+        return
+
+    ui_print(C.THINK, "⚡", f'Generating SFX: "{sfx_prompt}"...')
+    
+    try:
+        client = ElevenLabs(api_key=key)
+        # 1. Generate SFX audio (generator of bytes)
+        audio_generator = client.text_to_sound_effects.convert(
+            text=sfx_prompt,
+            duration_seconds=None, # auto-duration
+            prompt_influence=0.3   # higher = closer to prompt
+        )
+        # Load all bytes
+        audio_bytes = b"".join(list(audio_generator))
+        
+        # 2. Decode MP3 to raw PCM using pydub
+        f = io.BytesIO(audio_bytes)
+        seg = AudioSegment.from_file(f)
+        
+        # 3. Play stream
+        ui_print(C.APPLIED, "🔊", f'Playing SFX: "{sfx_prompt}"')
+        raw_data = seg.raw_data
+        sample_rate = seg.frame_rate
+        channels = seg.channels
+        
+        import numpy as np
+        # Convert pydub string bytes to numpy array
+        dt = np.int16 if seg.sample_width == 2 else np.int32
+        audio_np = np.frombuffer(raw_data, dtype=dt)
+        
+        # Reshape for sounddevice (frames, channels)
+        if channels > 1:
+            audio_np = audio_np.reshape((-1, channels))
+            
+        # Play in a blocking call *inside this off-thread*
+        sd.play(audio_np, samplerate=sample_rate)
+        sd.wait()
+        
+    except Exception as e:
+        ui_print(C.WARN, "⚠️ ", f"Failed playing SFX '{sfx_prompt}': {e}")
 
 
 # ---------------------------------------------------------------------------
