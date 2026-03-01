@@ -69,13 +69,16 @@ Then open `http://127.0.0.1:8080`.
 
 ### Railway Backend
 
+Railway can now detect the app as a standard Python service because the repo
+includes a top-level `requirements.txt` that points at `requirements-web.txt`.
+
 The backend entrypoint is:
 
 ```bash
 uvicorn api_server:app --host 0.0.0.0 --port $PORT
 ```
 
-A matching `Procfile` is included.
+A matching `Procfile` is included, so you do not need a custom start script.
 
 Required environment variables:
 
