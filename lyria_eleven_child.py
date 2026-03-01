@@ -242,16 +242,16 @@ Reply with ONLY the scene name, nothing else. One word (or two with underscore).
 If nothing matches well, pick the closest one anyway.
 
 Scene descriptions:
-  peaceful_village = calm, hiking, nature, peaceful, pastoral, medieval village
-  busy_tavern      = tavern, pub, drinking, festive, lively, medieval bar
-  mysterious_cave  = cave, dungeon, dark, eerie, underground, exploring
-  combat           = fight, battle, enemies, swords, RPG combat, action
-  epic_boss        = boss fight, final battle, epic, massive, climax
-  techno_party     = techno, rave, electronic, dance, party, bass
-  victory          = won, victory, celebration, triumph, success, fanfare
-  paris_rain       = rain, night, city, jazz, noir, melancholy, Paris
-  chase            = chase, pursuit, running, escape, fleeing, urgent
-  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation"""
+  peaceful_village = peasants, farmers, calm, hiking, nature, peaceful, pastoral, medieval village, safe, resting, market
+  busy_tavern      = tavern, pub, inn, drinking, festive, lively, medieval bar, ale, crowded, singing
+  mysterious_cave  = cave, dungeon, dark, eerie, underground, exploring, tombs, ruins, spooky, shadows, creeping
+  combat           = fight, battle, enemies, swords, attack, ambush, "an enemy appears", RPG combat, action, striking
+  epic_boss        = boss fight, final battle, epic, massive, climax, dragon, demon lord, huge threat
+  techno_party     = techno, rave, electronic, dance, party, bass, sci-fi club, cyberpunk bar
+  victory          = won, victory, celebration, triumph, success, fanfare, defeated the boss, level up, loot
+  paris_rain       = rain, night, city, jazz, noir, melancholy, sad, depressing, detective office, slow
+  chase            = chase, pursuit, running, escape, fleeing, urgent, hurry, running away, chasing him
+  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation, looking for clues, reading ancient text"""
 
 
 def dev_to_palette(prompt: str) -> dict[str, float]:
@@ -527,28 +527,26 @@ def dev_memory_to_scene(memory: list[str], current_scene: str) -> str:
         return current_scene
     client = _Mistral(api_key=api_key)
 
-    memory_text = " | ".join(memory[-10:])  # last 10 utterances
+    if not memory:
+        return current_scene
+
+    # Use only the last 5 utterances to avoid dragging ancient history
+    recent = memory[-5:]
+    if len(recent) > 1:
+        context_str = " | ".join(recent[:-1])
+        now_str = recent[-1]
+        user_prompt = f"Previous context: {context_str}\n\nJUST HAPPENED NOW: {now_str}"
+    else:
+        user_prompt = f"JUST HAPPENED NOW: {recent[0]}"
 
     system = f"""You are a scene selector for a live music system.
 Available scenes: {', '.join(DEV_SCENE_NAMES)}
 
 The CURRENT scene is: {current_scene}
 
-Based on what is being said (accumulated voice memory), decide:
-- If the conversation context still fits the current scene, reply with EXACTLY: {current_scene}
-- If the context has clearly shifted to a different mood/scene, reply with the new scene name.
-
-Scene descriptions:
-  peaceful_village = calm, hiking, nature, peaceful, pastoral, medieval village
-  busy_tavern      = tavern, pub, drinking, festive, lively, medieval bar
-  mysterious_cave  = cave, dungeon, dark, eerie, underground, exploring
-  combat           = fight, battle, enemies, swords, RPG combat, action
-  epic_boss        = boss fight, final battle, epic, massive, climax
-  techno_party     = techno, rave, electronic, dance, party, bass
-  victory          = won, victory, celebration, triumph, success, fanfare
-  paris_rain       = rain, night, city, jazz, noir, melancholy, Paris
-  chase            = chase, pursuit, running, escape, fleeing, urgent
-  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation
+Read the "Previous context" (if any) to understand the setting, but you MUST base your decision primarily on what "JUST HAPPENED NOW".
+- If the narrative "JUST HAPPENED NOW" still fits the current scene, reply with EXACTLY: {current_scene}
+- If the narrative has shifted to a different mood/scene (e.g., an enemy appeared -> combat), reply with the new scene name.
 
 Reply with ONLY the scene name. Nothing else."""
 
@@ -556,8 +554,8 @@ Reply with ONLY the scene name. Nothing else."""
         resp = client.chat.complete(
             model="open-mistral-7b",
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": f"Recent speech: {memory_text}"},
+                {"role": "system", "content": system + "\n\n" + DEV_MISTRAL_SYSTEM.split("Scene descriptions:")[1]},
+                {"role": "user",   "content": user_prompt},
             ],
             max_tokens=20,
             temperature=0.0,
