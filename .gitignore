@@ -1,7 +1,34 @@
+# Environment variables - never commit secrets
 .env
+.env.*
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Audio output files
 *.wav
+*.mp3
+*.ogg
+output/
+
+# Generated transcripts and session artifacts
 transcription.txt
 live_sessions/**
 live_sessions_test/**
+
+# Model checkpoints (large files)
+checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
