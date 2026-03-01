@@ -1,0 +1,544 @@
+{
+  "allowed_moods": [
+    "default",
+    "tense",
+    "action",
+    "boss",
+    "mystery",
+    "victory"
+  ],
+  "current_mood": "default",
+  "latest_mood_event": {
+    "mood": "default",
+    "confidence": 0.9,
+    "reason": "The scene contains neutral utterances without clear tension or urgency.",
+    "model": "mistral-small-latest",
+    "timestamp": 1772367632.093139,
+    "utterance_count": 39,
+    "changed": false
+  },
+  "utterances": [
+    {
+      "text": "Okay, the music starts.",
+      "timestamp": 1772367521.5095592
+    },
+    {
+      "text": "\u00e0 ce que tu penses.",
+      "timestamp": 1772367524.890694
+    },
+    {
+      "text": "some enemies. It gets hard",
+      "timestamp": 1772367526.432082
+    },
+    {
+      "text": "And we are facing further persistence.",
+      "timestamp": 1772367529.191201
+    },
+    {
+      "text": "Ok, now.",
+      "timestamp": 1772367531.432638
+    },
+    {
+      "text": "The boss arrives and we have to fight him.",
+      "timestamp": 1772367534.233137
+    },
+    {
+      "text": "He's very hard to fight. He's very strong.",
+      "timestamp": 1772367536.9712682
+    },
+    {
+      "text": "But the batteries, thanks.",
+      "timestamp": 1772367539.1046982
+    },
+    {
+      "text": "Je pense que \u00e7a va.",
+      "timestamp": 1772367541.579865
+    },
+    {
+      "text": "Apr\u00e8s, je ne sais pas, en vrai, l\u00e0, c'est...",
+      "timestamp": 1772367543.9885151
+    },
+    {
+      "text": "On dirait que c'est le dashboard des",
+      "timestamp": 1772367546.391815
+    },
+    {
+      "text": "Jopers, mais bien",
+      "timestamp": 1772367549.610636
+    },
+    {
+      "text": "est simplifi\u00e9 pour",
+      "timestamp": 1772367551.439562
+    },
+    {
+      "text": "Les gens, ils devraient voir \u00e7a.",
+      "timestamp": 1772367553.8659441
+    },
+    {
+      "text": "Et...",
+      "timestamp": 1772367556.4280279
+    },
+    {
+      "text": "Actuellement, on a d\u00e9cid\u00e9",
+      "timestamp": 1772367558.986758
+    },
+    {
+      "text": "Je ne sais pas si...",
+      "timestamp": 1772367561.35555
+    },
+    {
+      "text": "L\u00e0, elle est archpod\u00e9e. Comment? L\u00e0, la ligne.",
+      "timestamp": 1772367563.967652
+    },
+    {
+      "text": "des moules, des harpodes, des",
+      "timestamp": 1772367566.4628532
+    },
+    {
+      "text": "C'\u00e9tait un peu pour montrer, voir si \u00e7a marche ou pas.",
+      "timestamp": 1772367569.026004
+    },
+    {
+      "text": "\u0410\u0431\u0441\u043e\u043b\u044e\u0442\u043d\u043e \u0432\u0435\u0440\u043d\u043e.",
+      "timestamp": 1772367571.480631
+    },
+    {
+      "text": "sp\u00e9cial en changement de situation \u00e0 l'\u00e9troit au c\u0153ur de",
+      "timestamp": 1772367574.0606642
+    },
+    {
+      "text": "Le 4 novembre, il y a 6.",
+      "timestamp": 1772367576.393096
+    },
+    {
+      "text": "Tu changes.",
+      "timestamp": 1772367578.8541021
+    },
+    {
+      "text": "Il fait.",
+      "timestamp": 1772367581.499936
+    },
+    {
+      "text": "Thank you.",
+      "timestamp": 1772367584.0484219
+    },
+    {
+      "text": "Pardon.",
+      "timestamp": 1772367586.499553
+    },
+    {
+      "text": "Le clavier.",
+      "timestamp": 1772367588.9768908
+    },
+    {
+      "text": "C'est un peu comme \u00e7a.",
+      "timestamp": 1772367591.3880231
+    },
+    {
+      "text": "Il est \u00e0 l'\u00e9vent.",
+      "timestamp": 1772367594.0088801
+    },
+    {
+      "text": "C'est pas possible.",
+      "timestamp": 1772367596.434612
+    },
+    {
+      "text": "Merci.",
+      "timestamp": 1772367599.584859
+    },
+    {
+      "text": "Oui, c'est bien.",
+      "timestamp": 1772367604.461931
+    },
+    {
+      "text": "C'est important.",
+      "timestamp": 1772367607.392531
+    },
+    {
+      "text": "So, thank you.",
+      "timestamp": 1772367610.384127
+    },
+    {
+      "text": "Get up.",
+      "timestamp": 1772367613.293757
+    },
+    {
+      "text": "O\u00f9 ?",
+      "timestamp": 1772367618.822824
+    },
+    {
+      "text": "C'est vrai.",
+      "timestamp": 1772367624.0809631
+    },
+    {
+      "text": "dang.",
+      "timestamp": 1772367629.2928529
+    }
+  ],
+  "utterance_count": 39,
+  "transcript": "Okay, the music starts. \u00e0 ce que tu penses. some enemies. It gets hard And we are facing further persistence. Ok, now. The boss arrives and we have to fight him. He's very hard to fight. He's very strong. But the batteries, thanks. Je pense que \u00e7a va. Apr\u00e8s, je ne sais pas, en vrai, l\u00e0, c'est... On dirait que c'est le dashboard des Jopers, mais bien est simplifi\u00e9 pour Les gens, ils devraient voir \u00e7a. Et... Actuellement, on a d\u00e9cid\u00e9 Je ne sais pas si... L\u00e0, elle est archpod\u00e9e. Comment? L\u00e0, la ligne. des moules, des harpodes, des C'\u00e9tait un peu pour montrer, voir si \u00e7a marche ou pas. \u0410\u0431\u0441\u043e\u043b\u044e\u0442\u043d\u043e \u0432\u0435\u0440\u043d\u043e. sp\u00e9cial en changement de situation \u00e0 l'\u00e9troit au c\u0153ur de Le 4 novembre, il y a 6. Tu changes. Il fait. Thank you. Pardon. Le clavier. C'est un peu comme \u00e7a. Il est \u00e0 l'\u00e9vent. C'est pas possible. Merci. Oui, c'est bien. C'est important. So, thank you. Get up. O\u00f9 ? C'est vrai. dang.",
+  "partial_text": "",
+  "mood_history": [
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "The scene is ambiguous.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367522.592865,
+      "utterance_count": 1,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "The scene is ambiguous, so the safest neutral mood is kept.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367526.194517,
+      "utterance_count": 2,
+      "changed": false
+    },
+    {
+      "mood": "tense",
+      "confidence": 0.8,
+      "reason": "The scene involves enemies and increasing difficulty.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367527.4547231,
+      "utterance_count": 3,
+      "changed": true
+    },
+    {
+      "mood": "tense",
+      "confidence": 0.8,
+      "reason": "The scene involves facing enemies and persistence, indicating danger and pressure.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367530.114937,
+      "utterance_count": 4,
+      "changed": false
+    },
+    {
+      "mood": "tense",
+      "confidence": 0.9,
+      "reason": "The scene involves facing enemies and persistence, indicating danger and pressure.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367532.882006,
+      "utterance_count": 5,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 0.95,
+      "reason": "The boss arrives and we have to fight him.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367535.1354508,
+      "utterance_count": 6,
+      "changed": true
+    },
+    {
+      "mood": "boss",
+      "confidence": 1.0,
+      "reason": "The boss arrives and we have to fight him. He's very hard to fight. He's very strong.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367537.962175,
+      "utterance_count": 7,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 0.9,
+      "reason": "The boss arrives and we have to fight him. He's very hard to fight. He's very strong.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367540.085,
+      "utterance_count": 8,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 0.9,
+      "reason": "The boss is here and the fight is ongoing.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367542.876693,
+      "utterance_count": 9,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 1.0,
+      "reason": "The boss is arriving and the fight is starting.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367545.067397,
+      "utterance_count": 10,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 0.9,
+      "reason": "The boss fight is ongoing, with players expressing difficulty and urgency.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367547.5294778,
+      "utterance_count": 11,
+      "changed": false
+    },
+    {
+      "mood": "boss",
+      "confidence": 0.9,
+      "reason": "The players are still fighting the boss, and the utterances indicate a climactic confrontation.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367550.801692,
+      "utterance_count": 12,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.9,
+      "reason": "The recent utterances are casual and lack clear tension or urgency.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367552.646492,
+      "utterance_count": 13,
+      "changed": true
+    },
+    {
+      "mood": "default",
+      "confidence": 0.9,
+      "reason": "The scene is ambiguous and lacks clear indicators of tension, action, or other specific moods.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367554.796034,
+      "utterance_count": 14,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "The scene is ambiguous and lacks clear indicators of tension, action, or other specific moods.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367557.3465128,
+      "utterance_count": 15,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "The scene is ambiguous and lacks clear indicators of tension, action, or other specific moods.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367560.119905,
+      "utterance_count": 16,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "Recent utterances are neutral and conversational.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367562.976528,
+      "utterance_count": 17,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "The scene is ambiguous and lacks clear indicators of tension, action, or other specific moods.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367565.053024,
+      "utterance_count": 18,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "The scene is ambiguous, with no clear indicators of tension, action, or other specific moods.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367567.5393531,
+      "utterance_count": 19,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "The recent utterances are ambiguous and do not clearly indicate a specific mood. The scene lacks clear indicators of tension, action, mystery, or victory.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367570.118946,
+      "utterance_count": 20,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.85,
+      "reason": "The recent utterances are ambiguous and do not clearly indicate a specific mood. The conversation seems neutral and lacks clear indicators of tension, action, mystery, or victory.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367572.6793878,
+      "utterance_count": 21,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "The recent utterances are nonsensical and do not indicate any specific mood or tone. The scene is ambiguous, so the safest neutral mood is kept.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367576.4926138,
+      "utterance_count": 23,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "Recent utterances are nonsensical and do not indicate a clear scene tone, pacing, tension, or stakes.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367577.515222,
+      "utterance_count": 23,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "The recent utterances are ambiguous and do not clearly indicate any specific mood. The scene lacks clear indicators of tension, action, mystery, or victory.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367580.184907,
+      "utterance_count": 24,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "The utterances are ambiguous and do not clearly indicate a specific mood. The scene lacks clear indicators of tension, action, mystery, or victory.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367582.54014,
+      "utterance_count": 25,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.92,
+      "reason": "Recent utterances are nonsensical and do not indicate a clear scene tone, pacing, tension, or stakes.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367585.139625,
+      "utterance_count": 26,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "Recent utterances are nonsensical and do not indicate a clear scene tone.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367587.725296,
+      "utterance_count": 27,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "The recent utterances are nonsensical and do not indicate any specific mood or tone. The scene is ambiguous, so the safest neutral mood is kept.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367590.432728,
+      "utterance_count": 28,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "Recent utterances are neutral and conversational.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367592.287062,
+      "utterance_count": 29,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "Recent utterances are neutral and conversational.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367594.936384,
+      "utterance_count": 30,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.9,
+      "reason": "The recent utterances are in French and do not clearly indicate a specific mood. The scene appears to be neutral or exploratory.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367597.523319,
+      "utterance_count": 31,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "Recent utterances are neutral and unrelated to the game.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367600.665856,
+      "utterance_count": 32,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "The recent utterances are mundane and do not indicate any specific mood.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367605.515948,
+      "utterance_count": 33,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "The recent utterances are casual and lack clear tone, pacing, tension, or stakes.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367608.351748,
+      "utterance_count": 34,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.95,
+      "reason": "The scene is neutral and conversational.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367611.454189,
+      "utterance_count": 35,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.9,
+      "reason": "The recent utterances are neutral and conversational, indicating a calm and non-urgent situation.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367614.398772,
+      "utterance_count": 36,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.0,
+      "reason": "The scene is ambiguous, with a mix of casual dialogue and a single command 'Get up.' without clear context.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367619.845373,
+      "utterance_count": 37,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.85,
+      "reason": "The recent utterances are short and lack clear context or urgency. The scene appears to be neutral or conversational.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367625.067411,
+      "utterance_count": 38,
+      "changed": false
+    },
+    {
+      "mood": "default",
+      "confidence": 0.9,
+      "reason": "The scene contains neutral utterances without clear tension or urgency.",
+      "model": "mistral-small-latest",
+      "timestamp": 1772367632.093139,
+      "utterance_count": 39,
+      "changed": false
+    }
+  ],
+  "started_at": 1772367518.353029,
+  "updated_at": 1772367632.093142,
+  "version": 39,
+  "artifacts": {
+    "session_dir": "/Users/matthieu/Documents/projects/hackatons/mistralai2026/21_DnD/live_sessions/20260301_131838",
+    "state_output": "/Users/matthieu/Documents/projects/hackatons/mistralai2026/21_DnD/live_sessions/20260301_131838/conversation_state.json",
+    "transcript_output": "/Users/matthieu/Documents/projects/hackatons/mistralai2026/21_DnD/live_sessions/20260301_131838/transcript.txt",
+    "moods_output": "/Users/matthieu/Documents/projects/hackatons/mistralai2026/21_DnD/live_sessions/20260301_131838/moods.json",
+    "chunks_dir": "/Users/matthieu/Documents/projects/hackatons/mistralai2026/21_DnD/live_sessions/20260301_131838/chunks"
+  }
+}
