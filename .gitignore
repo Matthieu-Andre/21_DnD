@@ -1,4 +1,4 @@
-# Environment variables — never commit secrets
+# Environment variables - never commit secrets
 .env
 .env.*
 
@@ -20,6 +20,11 @@ env/
 *.mp3
 *.ogg
 output/
+
+# Generated transcripts and session artifacts
+transcription.txt
+live_sessions/**
+live_sessions_test/**
 
 # Model checkpoints (large files)
 checkpoints/
