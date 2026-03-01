@@ -10,25 +10,31 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mistralai import Mistral
 from pydantic import BaseModel, Field
 
+from lyria_service import LiveMusicSession
 from mood_agent import StrandsMoodClassifier
+from music_prompt_agent import MusicPromptPlanner
 
 
 ROOT_DIR = Path(__file__).parent.resolve()
+load_dotenv(ROOT_DIR / ".env")
 WEB_DIR = ROOT_DIR / "web"
 STATE_PATH = ROOT_DIR / "conversation_state.json"
 HISTORY_DIR = ROOT_DIR / "live_sessions"
 DEFAULT_TRANSCRIPTION_MODEL = "voxtral-mini-latest"
 DEFAULT_MOOD_MODEL = "mistral-small-latest"
-DEFAULT_LANGUAGE = "fr"
+DEFAULT_MUSIC_PROMPT_MODEL = "mistral-small-latest"
+DEFAULT_LANGUAGE = "en"
 DEFAULT_MOOD_WINDOW = 6
+ALLOWED_MUSIC_MODES = {"raw", "eleven", "developer"}
 DEFAULT_MOODS = [
     "default",
     "tense",
@@ -47,8 +53,17 @@ DEFAULT_MOOD_DESCRIPTIONS = {
 }
 
 
+def normalize_music_mode(value: str | None) -> str:
+    normalized = " ".join(str(value or "").split()).strip().lower().replace(" ", "_")
+    if normalized in ALLOWED_MUSIC_MODES:
+        return normalized
+    return "raw"
+
+
+DEFAULT_MUSIC_MODE = normalize_music_mode(os.getenv("DEFAULT_MUSIC_MODE"))
+
+
 def load_api_key() -> str:
-    load_dotenv(ROOT_DIR / ".env")
     api_key = os.getenv("MISTRAL_API_KEY")
     if not api_key:
         raise RuntimeError("MISTRAL_API_KEY is not set.")
@@ -56,7 +71,7 @@ def load_api_key() -> str:
 
 
 def normalize_text(text: str) -> str:
-    return " ".join(text.split()).strip()
+    return " ".join(str(text).split()).strip()
 
 
 def parse_mood_list(raw_moods: list[str] | None) -> list[str]:
@@ -66,11 +81,35 @@ def parse_mood_list(raw_moods: list[str] | None) -> list[str]:
     moods: list[str] = []
     seen: set[str] = set()
     for item in raw_moods:
-        normalized = normalize_text(str(item)).lower().replace(" ", "_")
+        normalized = normalize_text(item).lower().replace(" ", "_")
         if normalized and normalized not in seen:
             moods.append(normalized)
             seen.add(normalized)
     return moods or list(DEFAULT_MOODS)
+
+
+def build_demo_music_state(
+    *,
+    enabled: bool = False,
+    available: bool = False,
+    error: str = "",
+) -> dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "available": available,
+        "connected": False,
+        "mode": DEFAULT_MUSIC_MODE,
+        "sample_rate": 48_000,
+        "channels": 2,
+        "prompt": "",
+        "palette": [],
+        "palette_summary": "No palette",
+        "last_reason": "",
+        "last_source": "",
+        "last_update_at": None,
+        "listener_count": 0,
+        "error": error,
+    }
 
 
 def build_demo_state() -> dict[str, Any]:
@@ -87,6 +126,7 @@ def build_demo_state() -> dict[str, Any]:
         "updated_at": None,
         "version": 0,
         "artifacts": {},
+        "music": build_demo_music_state(),
     }
 
 
@@ -171,6 +211,7 @@ class BrowserSessionArtifacts:
         self.session_state_output = self.session_dir / "conversation_state.json"
         self.transcript_output = self.session_dir / "transcript.txt"
         self.moods_output = self.session_dir / "moods.json"
+        self.music_output = self.session_dir / "music.json"
         self._chunk_index = 0
 
     def write_chunk(self, audio_bytes: bytes, suffix: str) -> Path:
@@ -185,6 +226,7 @@ class BrowserSessionArtifacts:
             "state_output": str(self.session_state_output),
             "transcript_output": str(self.transcript_output),
             "moods_output": str(self.moods_output),
+            "music_output": str(self.music_output),
             "chunks_dir": str(self.chunks_dir),
         }
 
@@ -210,6 +252,10 @@ class BrowserSessionArtifacts:
             json.dumps(payload.get("mood_history", []), indent=2),
             encoding="utf-8",
         )
+        self.music_output.write_text(
+            json.dumps(payload.get("music", build_demo_music_state()), indent=2),
+            encoding="utf-8",
+        )
 
 
 class BrowserConversationSession:
@@ -222,6 +268,14 @@ class BrowserConversationSession:
         allowed_moods: list[str],
         mood_window: int,
         mood_agent_enabled: bool,
+        music_enabled: bool,
+        music_mode: str,
+        music_temperature: float,
+        music_guidance: float,
+        music_crossfade_seconds: float,
+        music_crossfade_steps: int,
+        music_seed: int,
+        music_prompt_model: str,
         artifacts: BrowserSessionArtifacts,
         log_callback: Callable[[str], None],
     ) -> None:
@@ -230,6 +284,9 @@ class BrowserConversationSession:
         self.mood_model = mood_model
         self.mood_window = max(1, mood_window)
         self.mood_agent_enabled = mood_agent_enabled
+        self.music_enabled = music_enabled
+        self.music_mode = music_mode
+        self.music_prompt_model = music_prompt_model
         self.artifacts = artifacts
         self.log_callback = log_callback
         self.session_id = artifacts.session_id
@@ -242,32 +299,90 @@ class BrowserConversationSession:
         self._requested_version = 0
         self._applied_version = 0
         self._classification_task: asyncio.Task[None] | None = None
+        self._requested_music_version = 0
+        self._applied_music_version = 0
+        self._music_force_refresh = False
+        self._music_task: asyncio.Task[None] | None = None
+        self._last_music_update_at = 0.0
+        self._last_music_update_version = 0
+        self._last_music_mood = self.state.current_mood
         self._mood_classifier = (
             StrandsMoodClassifier(
                 api_key=load_api_key(),
                 model_id=mood_model,
                 mood_descriptions={
-                    mood: DEFAULT_MOOD_DESCRIPTIONS.get(
-                        mood,
-                        mood.replace("_", " "),
-                    )
+                    mood: DEFAULT_MOOD_DESCRIPTIONS.get(mood, mood.replace("_", " "))
                     for mood in allowed_moods
                 },
             )
             if mood_agent_enabled
             else None
         )
+        self._music_planner = MusicPromptPlanner(
+            api_key=load_api_key(),
+            model_id=music_prompt_model,
+        )
+        self.music_session = (
+            LiveMusicSession(
+                mode=music_mode,
+                temperature=music_temperature,
+                guidance=music_guidance,
+                crossfade_seconds=music_crossfade_seconds,
+                crossfade_steps=music_crossfade_steps,
+                seed=music_seed,
+                log_callback=log_callback,
+            )
+            if music_enabled
+            else None
+        )
         self.persist()
 
+    async def initialize_music(self) -> None:
+        if not self.music_session:
+            self.persist()
+            return
+
+        current_mood = self.state.current_mood or self.state.allowed_moods[0]
+        planner = (
+            self._music_planner.plan_developer_scene
+            if self.music_mode == "developer"
+            else self._music_planner.plan
+        )
+        decision = await asyncio.to_thread(
+            planner,
+            current_mood=current_mood,
+            recent_utterances=[],
+            previous_prompt="",
+            previous_mood=None,
+            force=True,
+        )
+        await self.music_session.start(
+            initial_prompt=decision.prompt,
+            reason=decision.reason,
+            source=decision.source,
+        )
+        self._last_music_mood = current_mood
+        self._last_music_update_at = time.time()
+        self.log_callback(f"Music session initialized in {self.music_mode} mode.")
+        self.persist()
+
+    def music_snapshot(self) -> dict[str, Any]:
+        if self.music_session:
+            return self.music_session.snapshot()
+        return build_demo_music_state(
+            enabled=False,
+            available=False,
+            error="Music engine disabled for this session.",
+        )
+
     def persist(self) -> None:
-        with self._lock:
-            payload = self.state.to_payload()
-        self.artifacts.persist(payload)
+        self.artifacts.persist(self.snapshot())
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             payload = self.state.to_payload()
         payload["artifacts"] = self.artifacts.build_artifact_paths()
+        payload["music"] = self.music_snapshot()
         return payload
 
     def save_chunk(self, audio_bytes: bytes, file_name: str) -> Path:
@@ -284,9 +399,12 @@ class BrowserConversationSession:
             added = self.state.add_utterance(normalized)
             if added and self._mood_classifier:
                 self._requested_version = self.state.version
+            if added and self.music_session:
+                self._requested_music_version = self.state.version
         self.persist()
         if added:
             self._ensure_classification_task()
+            self._ensure_music_task()
         return added
 
     def _ensure_classification_task(self) -> None:
@@ -294,6 +412,12 @@ class BrowserConversationSession:
             return
         if self._classification_task is None or self._classification_task.done():
             self._classification_task = asyncio.create_task(self._run_classification_loop())
+
+    def _ensure_music_task(self) -> None:
+        if not self.music_session or not self.music_enabled:
+            return
+        if self._music_task is None or self._music_task.done():
+            self._music_task = asyncio.create_task(self._run_music_loop())
 
     async def _run_classification_loop(self) -> None:
         while True:
@@ -332,12 +456,86 @@ class BrowserConversationSession:
                 )
                 self.state.updated_at = time.time()
                 self._applied_version = target_version
+                if self.music_session:
+                    self._requested_music_version = self.state.version
+                    self._music_force_refresh = self._music_force_refresh or decision.mood != previous_mood
 
             self.persist()
             if decision.mood != previous_mood:
                 self.log_callback(
                     f"Mood -> {decision.mood} ({decision.confidence:.2f}) | {decision.reason}"
                 )
+            self._ensure_music_task()
+
+    def _should_refresh_music(self, *, target_version: int, current_mood: str, force: bool) -> bool:
+        if force:
+            return True
+        if not self.music_session:
+            return False
+        if not self.music_session.current_prompt:
+            return True
+        if current_mood != self._last_music_mood:
+            return True
+        if target_version - self._last_music_update_version >= 2:
+            return True
+        return (time.time() - self._last_music_update_at) >= 8.0
+
+    async def _run_music_loop(self) -> None:
+        while True:
+            with self._lock:
+                if not self.music_session or self._applied_music_version >= self._requested_music_version and not self._music_force_refresh:
+                    return
+                target_version = self._requested_music_version
+                force = self._music_force_refresh
+                current_mood = self.state.current_mood or self.state.allowed_moods[0]
+                recent_utterances = list(self.state.recent_utterances(6))
+                previous_prompt = self.music_session.current_prompt
+                previous_mood = self._last_music_mood
+
+            if not self._should_refresh_music(
+                target_version=target_version,
+                current_mood=current_mood,
+                force=force,
+            ):
+                with self._lock:
+                    self._applied_music_version = target_version
+                    self._music_force_refresh = False
+                return
+
+            try:
+                planner = (
+                    self._music_planner.plan_developer_scene
+                    if self.music_mode == "developer"
+                    else self._music_planner.plan
+                )
+                decision = await asyncio.to_thread(
+                    planner,
+                    current_mood=current_mood,
+                    recent_utterances=recent_utterances,
+                    previous_prompt=previous_prompt,
+                    previous_mood=previous_mood,
+                    force=force,
+                )
+            except Exception as exc:
+                self.log_callback(f"Music prompt planning failed: {exc}")
+                return
+
+            if decision.should_update and decision.prompt:
+                await self.music_session.steer(
+                    prompt=decision.prompt,
+                    source=decision.source,
+                    reason=decision.reason,
+                    force=force,
+                )
+                self._last_music_update_at = time.time()
+                self._last_music_update_version = target_version
+                self._last_music_mood = current_mood
+                self.log_callback(f"Music prompt -> {decision.prompt}")
+
+            with self._lock:
+                self._applied_music_version = target_version
+                self._music_force_refresh = False
+            self.persist()
 
     async def close(self) -> None:
         self.active = False
@@ -346,6 +544,13 @@ class BrowserConversationSession:
                 await self._classification_task
             except asyncio.CancelledError:
                 pass
+        if self._music_task:
+            try:
+                await self._music_task
+            except asyncio.CancelledError:
+                pass
+        if self.music_session:
+            await self.music_session.close()
         self.persist()
 
 
@@ -357,6 +562,14 @@ class StartSessionRequest(BaseModel):
     mood_agent: bool = True
     mood_window: int = Field(default=DEFAULT_MOOD_WINDOW, ge=1, le=20)
     chunk_seconds: float = Field(default=2.5, ge=1.0, le=10.0)
+    music_enabled: bool = True
+    music_mode: str = Field(default=DEFAULT_MUSIC_MODE)
+    music_temperature: float = Field(default=1.0, ge=0.5, le=2.0)
+    music_guidance: float = Field(default=4.0, ge=1.0, le=6.0)
+    music_crossfade_seconds: float = Field(default=4.0, ge=0.0, le=12.0)
+    music_crossfade_steps: int = Field(default=8, ge=1, le=32)
+    music_seed: int = Field(default=42)
+    music_prompt_model: str = Field(default=DEFAULT_MUSIC_PROMPT_MODEL)
 
 
 class SessionManager:
@@ -375,9 +588,18 @@ class SessionManager:
                 "mood_agent": True,
                 "mood_window": DEFAULT_MOOD_WINDOW,
                 "chunk_seconds": 2.5,
+                "music_enabled": True,
+                "music_mode": DEFAULT_MUSIC_MODE,
+                "music_temperature": 1.0,
+                "music_guidance": 4.0,
+                "music_crossfade_seconds": 4.0,
+                "music_crossfade_steps": 8,
+                "music_seed": 42,
+                "music_prompt_model": DEFAULT_MUSIC_PROMPT_MODEL,
             },
             "processing": False,
             "state_path": str(STATE_PATH),
+            "music": build_demo_music_state(),
         }
 
     def log(self, message: str) -> None:
@@ -389,9 +611,11 @@ class SessionManager:
         if not STATE_PATH.exists():
             return build_demo_state()
         try:
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            payload = json.loads(STATE_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return build_demo_state()
+        payload.setdefault("music", build_demo_music_state())
+        return payload
 
     def _runtime_payload(self) -> dict[str, Any]:
         with self._lock:
@@ -403,6 +627,7 @@ class SessionManager:
         session = self._session
         session_payload = session.snapshot() if session else self._load_last_state()
         runtime = self._runtime_payload()
+        runtime["music"] = session_payload.get("music", build_demo_music_state())
         if session and session.active:
             runtime["running"] = True
             runtime["mode"] = "live"
@@ -419,7 +644,7 @@ class SessionManager:
             "generated_at": time.time(),
         }
 
-    def start(self, request: StartSessionRequest) -> dict[str, Any]:
+    async def start(self, request: StartSessionRequest) -> dict[str, Any]:
         load_api_key()
         with self._lock:
             if self._session and self._session.active:
@@ -436,9 +661,19 @@ class SessionManager:
             allowed_moods=parse_mood_list(request.moods),
             mood_window=request.mood_window,
             mood_agent_enabled=request.mood_agent,
+            music_enabled=request.music_enabled,
+            music_mode=request.music_mode,
+            music_temperature=request.music_temperature,
+            music_guidance=request.music_guidance,
+            music_crossfade_seconds=request.music_crossfade_seconds,
+            music_crossfade_steps=request.music_crossfade_steps,
+            music_seed=request.music_seed,
+            music_prompt_model=request.music_prompt_model,
             artifacts=artifacts,
             log_callback=self.log,
         )
+
+        await session.initialize_music()
 
         with self._lock:
             self._session = session
@@ -453,9 +688,18 @@ class SessionManager:
                     "mood_agent": session.mood_agent_enabled,
                     "mood_window": session.mood_window,
                     "chunk_seconds": request.chunk_seconds,
+                    "music_enabled": request.music_enabled,
+                    "music_mode": request.music_mode,
+                    "music_temperature": request.music_temperature,
+                    "music_guidance": request.music_guidance,
+                    "music_crossfade_seconds": request.music_crossfade_seconds,
+                    "music_crossfade_steps": request.music_crossfade_steps,
+                    "music_seed": request.music_seed,
+                    "music_prompt_model": request.music_prompt_model,
                 },
                 "processing": False,
                 "state_path": str(STATE_PATH),
+                "music": session.music_snapshot(),
             }
 
         self.log("Browser live session started.")
@@ -515,8 +759,26 @@ class SessionManager:
             self._last_runtime["mode"] = "snapshot"
             self._last_runtime["processing"] = False
             self._last_runtime["current_session_id"] = None
+            self._last_runtime["music"] = session.music_snapshot()
         self.log("Browser live session stopped.")
         return self.snapshot()
+
+    def attach_music_listener(self, session_id: str) -> tuple[BrowserConversationSession, asyncio.Queue[bytes], str]:
+        session = self._session
+        if not session or not session.active or session.session_id != session_id:
+            raise RuntimeError("No active session matches this music stream.")
+        if not session.music_session:
+            raise RuntimeError("Music is disabled for the current session.")
+
+        listener_id = uuid4().hex
+        queue = session.music_session.attach_listener(listener_id)
+        return session, queue, listener_id
+
+    def detach_music_listener(self, session_id: str, listener_id: str) -> None:
+        session = self._session
+        if not session or session.session_id != session_id or not session.music_session:
+            return
+        session.music_session.detach_listener(listener_id)
 
 
 manager = SessionManager()
@@ -547,9 +809,10 @@ def get_state() -> dict[str, Any]:
 
 
 @app.post("/api/session/start")
-def start_session(request: StartSessionRequest) -> dict[str, Any]:
+async def start_session(request: StartSessionRequest) -> dict[str, Any]:
     try:
-        return manager.start(request)
+        request.music_mode = normalize_music_mode(request.music_mode)
+        return await manager.start(request)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -581,6 +844,37 @@ async def upload_chunk(
 @app.post("/api/session/{session_id}/stop")
 async def stop_session(session_id: str) -> dict[str, Any]:
     return await manager.stop(session_id)
+
+
+@app.websocket("/api/session/{session_id}/music/stream")
+async def stream_music(session_id: str, websocket: WebSocket) -> None:
+    await websocket.accept()
+    listener_id = ""
+    try:
+        session, queue, listener_id = manager.attach_music_listener(session_id)
+    except RuntimeError as exc:
+        await websocket.send_json({"type": "error", "detail": str(exc)})
+        await websocket.close(code=4404)
+        return
+
+    try:
+        await websocket.send_json(
+            {
+                "type": "init",
+                "music": session.music_snapshot(),
+            }
+        )
+        while True:
+            try:
+                chunk = await asyncio.wait_for(queue.get(), timeout=15.0)
+                await websocket.send_bytes(chunk)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "keepalive"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if listener_id:
+            manager.detach_music_listener(session_id, listener_id)
 
 
 if WEB_DIR.exists():

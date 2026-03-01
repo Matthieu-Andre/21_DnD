@@ -38,7 +38,7 @@
 
           <label class="control">
             <span>Language hint</span>
-            <input id="language-input" type="text" value="fr" maxlength="12" placeholder="fr or en">
+            <input id="language-input" type="text" value="en" maxlength="12" placeholder="en or fr">
           </label>
 
           <label class="control">
@@ -49,6 +49,25 @@
           <label class="control toggle-control">
             <span>Mood agent</span>
             <button class="ghost-button toggle-button active" id="mood-agent-toggle" type="button" aria-pressed="true">Enabled</button>
+          </label>
+
+          <label class="control toggle-control">
+            <span>Music engine</span>
+            <button class="ghost-button toggle-button active" id="music-toggle" type="button" aria-pressed="true">Enabled</button>
+          </label>
+
+          <label class="control">
+            <span>Music mode</span>
+            <select id="music-mode-select">
+              <option value="raw">Raw Prompt</option>
+              <option value="eleven">Eleven DNA</option>
+              <option value="developer">Developer Scenes</option>
+            </select>
+          </label>
+
+          <label class="control">
+            <span>Music volume</span>
+            <input id="music-volume-input" type="range" min="0" max="100" step="1" value="68">
           </label>
         </div>
 
@@ -90,6 +109,10 @@
             <span class="metric-label">Utterances</span>
             <strong class="metric-value" id="metric-utterances">0</strong>
           </article>
+          <article class="metric-card">
+            <span class="metric-label">Music</span>
+            <strong class="metric-value" id="metric-music">Idle</strong>
+          </article>
         </div>
 
         <footer class="tags" id="tags"></footer>
@@ -118,6 +141,27 @@
             <p id="transcript-meta">Live transcript will appear here.</p>
           </div>
           <div class="transcript-box" id="transcript-box"></div>
+        </div>
+
+        <div class="panel-block">
+          <div class="panel-heading">
+            <h2>Music Engine</h2>
+            <p id="music-status-copy">Music generation is idle.</p>
+          </div>
+          <div class="music-meta">
+            <article class="music-meta-card">
+              <span class="metric-label">Prompt</span>
+              <p id="music-prompt">No music prompt yet.</p>
+            </article>
+            <article class="music-meta-card">
+              <span class="metric-label">Reason</span>
+              <p id="music-reason">The backend has not steered the soundtrack yet.</p>
+            </article>
+            <article class="music-meta-card">
+              <span class="metric-label">Palette</span>
+              <p id="music-palette">No palette</p>
+            </article>
+          </div>
         </div>
 
         <div class="panel-block">

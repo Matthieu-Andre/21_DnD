@@ -9,6 +9,7 @@ const BASE_DECAY = 0.992;
 const SILENCE_DECAY = 0.968;
 const SILENCE_THRESHOLD = 0.018;
 const POLL_INTERVAL_MS = 1800;
+const MUSIC_BUFFER_MAX_SECONDS = 10;
 const DISPLACEMENT_MOOD_SCALE = {
   default: 1,
   tense: 1.06,
@@ -30,6 +31,9 @@ const elements = {
   languageInput: document.getElementById("language-input"),
   chunkSecondsInput: document.getElementById("chunk-seconds-input"),
   moodAgentToggle: document.getElementById("mood-agent-toggle"),
+  musicToggle: document.getElementById("music-toggle"),
+  musicModeSelect: document.getElementById("music-mode-select"),
+  musicVolumeInput: document.getElementById("music-volume-input"),
   refreshButton: document.getElementById("refresh-button"),
   sessionToggle: document.getElementById("session-toggle"),
   micButtonIcon: document.getElementById("mic-button-icon"),
@@ -38,12 +42,17 @@ const elements = {
   metricMood: document.getElementById("metric-mood"),
   metricConfidence: document.getElementById("metric-confidence"),
   metricUtterances: document.getElementById("metric-utterances"),
+  metricMusic: document.getElementById("metric-music"),
   tags: document.getElementById("tags"),
   moodReason: document.getElementById("mood-reason"),
   moodGrid: document.getElementById("mood-grid"),
   utteranceList: document.getElementById("utterance-list"),
   transcriptMeta: document.getElementById("transcript-meta"),
   transcriptBox: document.getElementById("transcript-box"),
+  musicStatusCopy: document.getElementById("music-status-copy"),
+  musicPrompt: document.getElementById("music-prompt"),
+  musicReason: document.getElementById("music-reason"),
+  musicPalette: document.getElementById("music-palette"),
   logBox: document.getElementById("log-box"),
 };
 
@@ -68,22 +77,60 @@ const preview = {
   smoothedDisplacement: 0,
 };
 
+const player = {
+  context: null,
+  processor: null,
+  gainNode: null,
+  websocket: null,
+  queue: [],
+  currentChunk: null,
+  currentFrameOffset: 0,
+  bufferedFrames: 0,
+  sampleRate: 48000,
+  channels: 2,
+  status: "idle",
+  manualClose: false,
+};
+
 const appState = {
   runtime: {
     running: false,
     current_session_id: null,
     processing: false,
     config: {
-      language: "fr",
+      language: "en",
       transcription_model: "voxtral-mini-latest",
       mood_model: "mistral-small-latest",
       mood_agent: true,
       mood_window: 6,
       chunk_seconds: 2.5,
+      music_enabled: true,
+      music_mode: "raw",
+      music_temperature: 1,
+      music_guidance: 4,
+      music_crossfade_seconds: 4,
+      music_crossfade_steps: 8,
+      music_seed: 42,
+      music_prompt_model: "mistral-small-latest",
+    },
+    music: {
+      enabled: false,
+      available: false,
+      connected: false,
+      mode: "raw",
+      prompt: "",
+      palette_summary: "No palette",
+      last_reason: "",
+      error: "",
     },
     logs: [],
   },
-  session: { allowed_moods: [], utterances: [], mood_history: [] },
+  session: {
+    allowed_moods: [],
+    utterances: [],
+    mood_history: [],
+    music: {},
+  },
   error: "",
 };
 
@@ -93,11 +140,12 @@ function titleCase(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function getMoodScale() {
-  return (
-    DISPLACEMENT_MOOD_SCALE[appState.session.current_mood] ||
-    DISPLACEMENT_MOOD_SCALE.default
-  );
+  return DISPLACEMENT_MOOD_SCALE[appState.session.current_mood] || DISPLACEMENT_MOOD_SCALE.default;
 }
 
 function midpoint(pointA, pointB) {
@@ -205,7 +253,7 @@ function sampleLiveDisplacement() {
   }
 
   const gatedPeak = Math.abs(signedPeak) < 0.012 ? 0 : signedPeak;
-  const normalized = Math.max(-0.55, Math.min(0.55, gatedPeak * 2.2));
+  const normalized = clamp(gatedPeak * 2.2, -0.55, 0.55);
   preview.smoothedDisplacement = preview.smoothedDisplacement * 0.84 + normalized * 0.16;
   return preview.smoothedDisplacement;
 }
@@ -271,6 +319,15 @@ function buildApiUrl(path) {
   return new URL(path, `${base}/`).toString();
 }
 
+function buildWebSocketUrl(path) {
+  const base = getApiBase();
+  const url = base
+    ? new URL(path, `${base}/`)
+    : new URL(path, window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 function saveApiBase() {
   localStorage.setItem("dnd-api-base-url", getApiBase());
 }
@@ -328,6 +385,27 @@ function formatTime(timestamp) {
   }
 }
 
+function getMusicState() {
+  return appState.runtime.music || appState.session.music || {};
+}
+
+function getMusicEngineLabel() {
+  const music = getMusicState();
+  if (!appState.runtime.config?.music_enabled) {
+    return "Off";
+  }
+  if (!music.available) {
+    return "Unavailable";
+  }
+  if (player.status === "streaming") {
+    return "Live";
+  }
+  if (player.status === "connecting" || music.connected) {
+    return "Arming";
+  }
+  return "Idle";
+}
+
 function buildStatusMessage() {
   if (appState.error) {
     return appState.error;
@@ -337,19 +415,32 @@ function buildStatusMessage() {
     ? "Browser audio streaming is active."
     : "No live transcription is running.";
 
-  const previewMessage =
-    {
-      granted: "Browser microphone capture is active.",
-      denied: "Browser microphone access was denied. Visualizer is in demo mode.",
-      unsupported: "Browser audio capture is unavailable here. Visualizer is in demo mode.",
-      idle: "Waiting to open the browser microphone.",
-    }[preview.permission] || "Visualizer is in demo mode.";
+  const previewMessage = {
+    granted: "Browser microphone capture is active.",
+    denied: "Browser microphone access was denied. Visualizer is in demo mode.",
+    unsupported: "Browser audio capture is unavailable here. Visualizer is in demo mode.",
+    idle: "Waiting to open the browser microphone.",
+  }[preview.permission] || "Visualizer is in demo mode.";
 
   const processingMessage = appState.runtime.processing
     ? "Backend is processing a chunk."
     : "Backend is idle.";
 
-  return `${runtimeMessage} ${previewMessage} ${processingMessage}`;
+  const music = getMusicState();
+  let musicMessage = "Music is disabled.";
+  if (appState.runtime.config?.music_enabled) {
+    if (!music.available) {
+      musicMessage = music.error ? `Music unavailable: ${music.error}` : "Music engine unavailable.";
+    } else if (player.status === "streaming") {
+      musicMessage = "Music stream is live in the browser.";
+    } else if (player.status === "connecting") {
+      musicMessage = "Music stream is connecting.";
+    } else {
+      musicMessage = "Music engine is ready.";
+    }
+  }
+
+  return `${runtimeMessage} ${previewMessage} ${processingMessage} ${musicMessage}`;
 }
 
 function renderTags() {
@@ -357,6 +448,9 @@ function renderTags() {
   tags.push(titleCase(appState.session.current_mood || "default"));
   tags.push(appState.runtime.running ? "Browser Live" : "Snapshot");
   tags.push(preview.permission === "granted" ? "Mic Open" : "Demo Visuals");
+  if (appState.runtime.config?.music_enabled) {
+    tags.push(`Music ${titleCase(appState.runtime.config.music_mode || "raw")}`);
+  }
 
   elements.tags.innerHTML = tags.map((tag) => `<span class="tag">${tag}</span>`).join("");
 }
@@ -386,7 +480,7 @@ function renderUtterances() {
           <time>${formatTime(utterance.timestamp)}</time>
           <p>${utterance.text}</p>
         </article>
-      `
+      `,
     )
     .join("");
 }
@@ -394,9 +488,20 @@ function renderUtterances() {
 function renderTranscript() {
   const transcript = appState.session.transcript || appState.session.partial_text || "";
   elements.transcriptMeta.textContent = appState.runtime.running
-    ? "Polling the FastAPI session state while chunks upload from the browser."
+    ? "Uploading browser audio to FastAPI while the soundtrack streams back over WebSocket."
     : "Showing the most recent saved session snapshot.";
   elements.transcriptBox.textContent = transcript || "No transcript available yet.";
+}
+
+function renderMusicPanel() {
+  const music = getMusicState();
+  const modeLabel = titleCase(music.mode || appState.runtime.config?.music_mode || "raw");
+  elements.musicStatusCopy.textContent = appState.runtime.config?.music_enabled
+    ? `${modeLabel} music mode. ${music.connected ? "Backend generator is connected." : "Waiting for the generator."}`
+    : "Music generation is disabled for this session.";
+  elements.musicPrompt.textContent = music.prompt || "No music prompt yet.";
+  elements.musicReason.textContent = music.last_reason || "The backend has not steered the soundtrack yet.";
+  elements.musicPalette.textContent = music.palette_summary || "No palette";
 }
 
 function renderLogs() {
@@ -407,18 +512,26 @@ function renderLogs() {
 function updateControls() {
   const config = appState.runtime.config || {};
   if (!appState.runtime.running) {
-    elements.languageInput.value = config.language || "fr";
+    elements.languageInput.value = config.language || "en";
     elements.chunkSecondsInput.value = String(config.chunk_seconds || 2.5);
+    elements.musicModeSelect.value = config.music_mode || "raw";
   }
 
   elements.languageInput.disabled = appState.runtime.running;
   elements.chunkSecondsInput.disabled = appState.runtime.running;
   elements.moodAgentToggle.disabled = appState.runtime.running;
+  elements.musicToggle.disabled = appState.runtime.running;
+  elements.musicModeSelect.disabled = appState.runtime.running || elements.musicToggle.getAttribute("aria-pressed") !== "true";
 
   const moodAgentEnabled = Boolean(config.mood_agent);
   elements.moodAgentToggle.classList.toggle("active", moodAgentEnabled);
   elements.moodAgentToggle.textContent = moodAgentEnabled ? "Enabled" : "Disabled";
   elements.moodAgentToggle.setAttribute("aria-pressed", String(moodAgentEnabled));
+
+  const musicEnabled = Boolean(config.music_enabled);
+  elements.musicToggle.classList.toggle("active", musicEnabled);
+  elements.musicToggle.textContent = musicEnabled ? "Enabled" : "Disabled";
+  elements.musicToggle.setAttribute("aria-pressed", String(musicEnabled));
 
   elements.enginePill.textContent = appState.runtime.running ? "Live" : titleCase(appState.runtime.mode || "idle");
   elements.micButtonIcon.textContent = appState.runtime.running ? "STOP" : "LIVE";
@@ -444,6 +557,7 @@ function updateCopy() {
   elements.metricMood.textContent = titleCase(appState.session.current_mood || "default");
   elements.metricConfidence.textContent = `${Math.round((latestMoodEvent?.confidence || 0) * 100)}%`;
   elements.metricUtterances.textContent = String(utteranceCount);
+  elements.metricMusic.textContent = getMusicEngineLabel();
   elements.moodReason.textContent = latestMoodEvent?.reason || "No mood classification yet.";
 }
 
@@ -458,6 +572,7 @@ function applyState(payload) {
   renderMoodGrid();
   renderUtterances();
   renderTranscript();
+  renderMusicPanel();
   renderLogs();
 }
 
@@ -476,7 +591,15 @@ function getChunkSeconds() {
   if (!Number.isFinite(parsed)) {
     return 2.5;
   }
-  return Math.min(10, Math.max(1, parsed));
+  return clamp(parsed, 1, 10);
+}
+
+function getMusicVolume() {
+  const parsed = Number.parseFloat(elements.musicVolumeInput.value);
+  if (!Number.isFinite(parsed)) {
+    return 0.68;
+  }
+  return clamp(parsed / 100, 0, 1);
 }
 
 function mergeBuffers(buffers) {
@@ -516,7 +639,7 @@ function encodeWav(samples, sampleRate) {
 
   let offset = 44;
   samples.forEach((sample) => {
-    const value = Math.max(-1, Math.min(1, sample));
+    const value = clamp(sample, -1, 1);
     view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
     offset += 2;
   });
@@ -678,19 +801,217 @@ async function cleanupAudioCapture() {
   runDemoAnimation();
 }
 
+function resetMusicBuffers() {
+  player.queue = [];
+  player.currentChunk = null;
+  player.currentFrameOffset = 0;
+  player.bufferedFrames = 0;
+}
+
+function fillPlaybackBuffer(outputBuffer) {
+  const left = outputBuffer.getChannelData(0);
+  const right = outputBuffer.getChannelData(1);
+  left.fill(0);
+  right.fill(0);
+
+  let frameIndex = 0;
+  while (frameIndex < left.length) {
+    if (!player.currentChunk) {
+      const nextChunk = player.queue.shift();
+      if (!nextChunk) {
+        break;
+      }
+      player.currentChunk = nextChunk;
+      player.currentFrameOffset = 0;
+    }
+
+    const totalFrames = Math.floor(player.currentChunk.length / player.channels);
+    const remainingFrames = totalFrames - player.currentFrameOffset;
+    const framesToCopy = Math.min(left.length - frameIndex, remainingFrames);
+
+    for (let index = 0; index < framesToCopy; index += 1) {
+      const sourceIndex = (player.currentFrameOffset + index) * player.channels;
+      left[frameIndex + index] = player.currentChunk[sourceIndex] / 32768;
+      right[frameIndex + index] = player.currentChunk[sourceIndex + 1] / 32768;
+    }
+
+    frameIndex += framesToCopy;
+    player.currentFrameOffset += framesToCopy;
+    player.bufferedFrames = Math.max(0, player.bufferedFrames - framesToCopy);
+
+    if (player.currentFrameOffset >= totalFrames) {
+      player.currentChunk = null;
+      player.currentFrameOffset = 0;
+    }
+  }
+}
+
+function updateVolume() {
+  if (player.gainNode) {
+    player.gainNode.gain.value = getMusicVolume();
+  }
+}
+
+async function ensureMusicPlayback() {
+  if (player.context) {
+    if (player.context.state === "suspended") {
+      await player.context.resume();
+    }
+    updateVolume();
+    return;
+  }
+
+  const preferredRate = getMusicState().sample_rate || 48000;
+  try {
+    player.context = new AudioContext({ sampleRate: preferredRate });
+  } catch (_error) {
+    player.context = new AudioContext();
+  }
+  player.sampleRate = preferredRate;
+  player.channels = 2;
+  player.gainNode = player.context.createGain();
+  try {
+    player.processor = player.context.createScriptProcessor(4096, 0, 2);
+  } catch (_error) {
+    player.processor = player.context.createScriptProcessor(4096, 1, 2);
+  }
+  player.processor.onaudioprocess = (event) => {
+    fillPlaybackBuffer(event.outputBuffer);
+  };
+  player.processor.connect(player.gainNode);
+  player.gainNode.connect(player.context.destination);
+  updateVolume();
+  await player.context.resume();
+}
+
+function enqueueMusicChunk(arrayBuffer) {
+  const chunk = new Int16Array(arrayBuffer);
+  if (!chunk.length) {
+    return;
+  }
+
+  player.queue.push(chunk);
+  player.bufferedFrames += Math.floor(chunk.length / player.channels);
+
+  const maxFrames = player.sampleRate * MUSIC_BUFFER_MAX_SECONDS;
+  while (player.bufferedFrames > maxFrames && player.queue.length > 1) {
+    const dropped = player.queue.shift();
+    if (!dropped) {
+      break;
+    }
+    player.bufferedFrames -= Math.floor(dropped.length / player.channels);
+  }
+}
+
+async function closeMusicSocket() {
+  if (!player.websocket) {
+    return;
+  }
+  player.manualClose = true;
+  player.websocket.close();
+  player.websocket = null;
+}
+
+async function cleanupMusicPlayback() {
+  await closeMusicSocket();
+  resetMusicBuffers();
+  if (player.processor) {
+    player.processor.disconnect();
+    player.processor.onaudioprocess = null;
+    player.processor = null;
+  }
+  if (player.gainNode) {
+    player.gainNode.disconnect();
+    player.gainNode = null;
+  }
+  if (player.context) {
+    await player.context.close();
+    player.context = null;
+  }
+  player.status = "idle";
+  player.manualClose = false;
+}
+
+async function startMusicStream(sessionId) {
+  const music = getMusicState();
+  if (!appState.runtime.config?.music_enabled || !music.available || !sessionId) {
+    return;
+  }
+
+  await ensureMusicPlayback();
+  await closeMusicSocket();
+  resetMusicBuffers();
+
+  player.status = "connecting";
+  player.manualClose = false;
+  const socket = new WebSocket(buildWebSocketUrl(`/api/session/${sessionId}/music/stream`));
+  socket.binaryType = "arraybuffer";
+  player.websocket = socket;
+
+  socket.addEventListener("message", (event) => {
+    if (typeof event.data === "string") {
+      let payload = {};
+      try {
+        payload = JSON.parse(event.data);
+      } catch (_error) {
+        payload = {};
+      }
+      if (payload.type === "init" && payload.music) {
+        appState.runtime.music = payload.music;
+        player.sampleRate = payload.music.sample_rate || player.sampleRate;
+        player.channels = payload.music.channels || 2;
+        player.status = "streaming";
+        updateCopy();
+        renderMusicPanel();
+      } else if (payload.type === "error") {
+        appState.error = payload.detail || "Music stream failed.";
+        updateCopy();
+      }
+      return;
+    }
+
+    enqueueMusicChunk(event.data);
+    if (player.status !== "streaming") {
+      player.status = "streaming";
+      updateCopy();
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    if (player.websocket === socket) {
+      player.websocket = null;
+    }
+    if (!player.manualClose) {
+      player.status = "idle";
+      updateCopy();
+    }
+    player.manualClose = false;
+  });
+
+  socket.addEventListener("error", () => {
+    appState.error = "Music websocket failed.";
+    updateCopy();
+  });
+}
+
 async function startSession() {
   await ensureAudioCapture();
   const payload = await api("/api/session/start", {
     method: "POST",
     body: JSON.stringify({
-      language: elements.languageInput.value.trim() || "fr",
+      language: elements.languageInput.value.trim() || "en",
       chunk_seconds: getChunkSeconds(),
       mood_agent: elements.moodAgentToggle.getAttribute("aria-pressed") === "true",
+      music_enabled: elements.musicToggle.getAttribute("aria-pressed") === "true",
+      music_mode: elements.musicModeSelect.value,
     }),
   });
   applyState(payload);
   preview.activeSessionId = payload.runtime.current_session_id || "";
   startFlushTimer();
+  if (payload.runtime.config?.music_enabled && payload.runtime.music?.available) {
+    await startMusicStream(preview.activeSessionId);
+  }
 }
 
 async function stopSession() {
@@ -707,6 +1028,7 @@ async function stopSession() {
     applyState(payload);
   }
 
+  await cleanupMusicPlayback();
   await cleanupAudioCapture();
 }
 
@@ -718,6 +1040,17 @@ function onToggleMoodAgent() {
   elements.moodAgentToggle.setAttribute("aria-pressed", String(nextValue));
   elements.moodAgentToggle.classList.toggle("active", nextValue);
   elements.moodAgentToggle.textContent = nextValue ? "Enabled" : "Disabled";
+}
+
+function onToggleMusic() {
+  if (appState.runtime.running) {
+    return;
+  }
+  const nextValue = elements.musicToggle.getAttribute("aria-pressed") !== "true";
+  elements.musicToggle.setAttribute("aria-pressed", String(nextValue));
+  elements.musicToggle.classList.toggle("active", nextValue);
+  elements.musicToggle.textContent = nextValue ? "Enabled" : "Disabled";
+  elements.musicModeSelect.disabled = !nextValue;
 }
 
 async function onSessionToggle() {
@@ -737,6 +1070,8 @@ async function onSessionToggle() {
 function attachEvents() {
   elements.refreshButton.addEventListener("click", refreshState);
   elements.moodAgentToggle.addEventListener("click", onToggleMoodAgent);
+  elements.musicToggle.addEventListener("click", onToggleMusic);
+  elements.musicVolumeInput.addEventListener("input", updateVolume);
   elements.sessionToggle.addEventListener("click", onSessionToggle);
   elements.apiBaseInput.addEventListener("change", () => {
     saveApiBase();
@@ -752,6 +1087,7 @@ function init() {
 
   runDemoAnimation();
   attachEvents();
+  updateVolume();
   refreshState();
   window.setInterval(refreshState, POLL_INTERVAL_MS);
 }

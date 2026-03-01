@@ -4,3 +4,5 @@ python-multipart
 python-dotenv
 mistralai
 strands-agents[mistral]
+google-genai
+elevenlabs

@@ -249,6 +249,11 @@ input {
   width: 100%;
 }
 
+input[type="range"] {
+  padding: 10px 12px;
+  accent-color: var(--ring-a);
+}
+
 input::placeholder {
   color: rgba(112, 93, 81, 0.72);
 }
@@ -405,7 +410,7 @@ input:focus-visible,
 
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -471,6 +476,25 @@ input:focus-visible,
   max-width: 26rem;
   font-size: 0.92rem;
   text-align: right;
+}
+
+.music-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.music-meta-card {
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 249, 241, 0.84);
+}
+
+.music-meta-card p {
+  margin: 10px 0 0;
+  color: var(--text-main);
+  line-height: 1.55;
 }
 
 .mood-grid {
@@ -581,6 +605,10 @@ input:focus-visible,
 
   .panel-heading p {
     text-align: left;
+  }
+
+  .music-meta {
+    grid-template-columns: 1fr;
   }
 }
 
