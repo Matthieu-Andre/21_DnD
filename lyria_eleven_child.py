@@ -179,6 +179,125 @@ def raw_to_palette(prompt: str) -> dict[str, float]:
     return {prompt: 1.0}
 
 
+# ---------------------------------------------------------------------------
+# Developer mode: 10 hardcoded palettes + Mistral scene selector
+# ---------------------------------------------------------------------------
+DEV_SCENES: dict[str, dict[str, float]] = {
+    "peaceful_village": {
+        "medieval folk": 1.2, "pastoral": 1.2, "acoustic": 1.2,
+        "gentle flute melody": 0.9, "plucked lute strings": 0.9,
+        "birdsong": 0.9, "soft hand drum": 0.9, "warm": 1.0,
+        "relaxing": 1.0, "peaceful": 1.0, "moderate walking tempo": 0.9,
+        "folk": 1.0, "instrumental": 1.0,
+    },
+    "mysterious_cave": {
+        "dark ambient": 1.2, "cinematic": 1.2, "atmospheric": 1.2,
+        "mysterious": 1.2, "eerie": 1.2, "soundscape": 1.2,
+        "low resonant drone": 0.9, "dripping water sounds": 0.9,
+        "subtle wind blowing": 0.9, "reverb": 0.9,
+        "slowly building tension": 0.9, "sparse eerie piano": 0.9,
+        "ambient": 1.0, "instrumental": 1.0,
+    },
+    "combat": {
+        "orchestral action": 1.2, "battle music": 1.2, "intense": 1.2,
+        "urgent": 1.0, "aggressive": 1.0, "driving rhythm": 1.0,
+        "fast war drums": 0.9, "staccato strings": 0.9,
+        "brass fanfare": 0.9, "percussion hits": 0.9,
+        "high energy": 0.9, "fast tempo 150 BPM": 0.9,
+        "cinematic": 1.0, "instrumental": 1.0,
+    },
+    "techno_party": {
+        "techno": 1.2, "industrial": 1.2, "electronic": 1.2,
+        "driving beat": 1.2, "rave": 1.2,
+        "hard bass drop": 0.9, "distorted synth lead": 0.9,
+        "repetitive kick drum": 0.9, "acid bassline": 0.9,
+        "high energy": 1.0, "dark": 1.0,
+        "fast 140 BPM": 0.9, "laser synth stab": 0.9,
+        "instrumental": 1.0,
+    },
+    "victory": {
+        "triumphant fanfare": 1.2, "celebratory": 1.2, "uplifting": 1.2,
+        "joyful": 1.0, "bright": 1.0, "heroic": 1.0,
+        "brass melody": 0.9, "orchestral swell": 0.9,
+        "snare roll": 0.9, "harp glissando": 0.9,
+        "chimes": 0.9, "major key": 0.9,
+        "cinematic": 1.0, "instrumental": 1.0,
+    },
+    "puzzle": {
+        "mysterious": 1.2, "subtle": 1.2, "detective": 1.2,
+        "investigation": 1.2, "thinking": 1.2,
+        "light piano motif": 0.9, "subtle pizzicato strings": 0.9,
+        "minimalist percussion": 0.9, "curiosity": 0.9,
+        "a sense of quiet thought": 0.9, "sparse plucked notes": 0.9,
+        "ambient": 1.0, "instrumental": 1.0,
+    },
+}
+
+DEV_SCENE_NAMES = list(DEV_SCENES.keys())
+
+DEV_MISTRAL_SYSTEM = f"""You map a user's free-form text to the single BEST matching scene from this list:
+{', '.join(DEV_SCENE_NAMES)}
+
+Reply with ONLY the scene name, nothing else. One word (or two with underscore).
+If nothing matches well, pick the closest one anyway.
+
+Scene descriptions:
+  peaceful_village = calm, hiking, nature, peaceful, pastoral, medieval village
+  busy_tavern      = tavern, pub, drinking, festive, lively, medieval bar
+  mysterious_cave  = cave, dungeon, dark, eerie, underground, exploring
+  combat           = fight, battle, enemies, swords, RPG combat, action
+  epic_boss        = boss fight, final battle, epic, massive, climax
+  techno_party     = techno, rave, electronic, dance, party, bass
+  victory          = won, victory, celebration, triumph, success, fanfare
+  paris_rain       = rain, night, city, jazz, noir, melancholy, Paris
+  chase            = chase, pursuit, running, escape, fleeing, urgent
+  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation"""
+
+
+def dev_to_palette(prompt: str) -> dict[str, float]:
+    """Developer mode: use Mistral to pick the closest hardcoded scene."""
+    try:
+        from mistralai import Mistral as _Mistral
+    except ImportError:
+        ui_print(C.WARN, "⚠️ ", "mistralai not installed — pip install mistralai")
+        return {prompt: 1.0}
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        ui_print(C.WARN, "⚠️ ", "MISTRAL_API_KEY not found in .env")
+        return {prompt: 1.0}
+
+    ui_print(C.THINK, "⚡", f'Matching "{prompt}" to scene…', flush=True)
+    client = _Mistral(api_key=api_key)
+    try:
+        resp = client.chat.complete(
+            model="open-mistral-7b",
+            messages=[
+                {"role": "system", "content": DEV_MISTRAL_SYSTEM},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=20,
+            temperature=0.0,
+        )
+        scene_name = resp.choices[0].message.content.strip().lower().replace(" ", "_")
+    except Exception as exc:
+        ui_print(C.WARN, "⚠️ ", f"Mistral failed ({exc}) — defaulting to peaceful_village")
+        scene_name = "peaceful_village"
+
+    # Fuzzy match: find best matching key
+    best = scene_name if scene_name in DEV_SCENES else None
+    if not best:
+        for key in DEV_SCENE_NAMES:
+            if key in scene_name or scene_name in key:
+                best = key
+                break
+    if not best:
+        best = "peaceful_village"
+
+    palette = DEV_SCENES[best]
+    ui_print(C.APPLIED, "🎬", f'Scene: {C.BOLD}{best}{C.RESET}  ({len(palette)} prompts)')
+    return dict(palette)
+
+
 def palette_display(palette: dict[str, float]) -> str:
     parts = [f'"{t}":{w:.2f}' for t, w in sorted(palette.items(), key=lambda x: -x[1])]
     return "  ".join(parts)
@@ -258,6 +377,205 @@ def input_reader(prompt_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
 
 
 # ---------------------------------------------------------------------------
+# Voice listener (Voxtral real-time STT)
+# ---------------------------------------------------------------------------
+VOXTRAL_MODEL   = "voxtral-mini-transcribe-realtime-2602"
+VOXTRAL_RATE    = 16_000
+VOXTRAL_CHUNK_MS = 480
+
+
+async def voice_listener(
+    prompt_queue: asyncio.Queue,
+    stop_event: asyncio.Event,
+    args: argparse.Namespace,
+    current_scene_holder: list,     # mutable holder: [current_scene_name]
+    voice_memory: list,             # accumulated speech segments
+):
+    """Listen to mic via Voxtral, feed utterances into the prompt_queue.
+
+    Normal mode:   each completed utterance → prompt_queue as-is.
+    Developer mode: utterances accumulate in voice_memory, Mistral decides
+                    if the scene should change based on the full context.
+    """
+    import traceback
+    from mistralai import Mistral as _Mistral
+    from mistralai.extra.realtime import UnknownRealtimeEvent
+    from mistralai.models import (
+        AudioFormat,
+        RealtimeTranscriptionError,
+        RealtimeTranscriptionSessionCreated,
+        TranscriptionStreamDone,
+        TranscriptionStreamTextDelta,
+    )
+    import pyaudio
+
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        ui_print(C.WARN, "⚠️ ", "MISTRAL_API_KEY not found — voice disabled")
+        return
+
+    SILENCE_MIN_CHARS = 3
+
+    # ── Startup mic test ──────────────────────────────────────────────
+    ui_print(C.VOICE, "🎤", "Testing microphone…", flush=True)
+    try:
+        _p = pyaudio.PyAudio()
+        _chunk = int(VOXTRAL_RATE * VOXTRAL_CHUNK_MS / 1000)
+        _st = _p.open(format=pyaudio.paInt16, channels=1,
+                      rate=VOXTRAL_RATE, input=True,
+                      frames_per_buffer=_chunk)
+        _st.read(_chunk, exception_on_overflow=False)   # one test read
+        _st.stop_stream(); _st.close(); _p.terminate()
+        ui_print(C.APPLIED, "✅", "Microphone OK", flush=True)
+    except Exception as exc:
+        ui_print(C.WARN, "❌", f"Could not open microphone: {exc}", flush=True)
+        ui_print(C.WARN, "  ", "Voice input disabled. Continue with keyboard only.", flush=True)
+        return
+
+    # ── Mic async generator ───────────────────────────────────────────
+    async def iter_mic():
+        p = pyaudio.PyAudio()
+        chunk_samples = int(VOXTRAL_RATE * VOXTRAL_CHUNK_MS / 1000)
+        stream = p.open(
+            format=pyaudio.paInt16, channels=1,
+            rate=VOXTRAL_RATE, input=True,
+            frames_per_buffer=chunk_samples,
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            while not stop_event.is_set():
+                data = await loop.run_in_executor(
+                    None, stream.read, chunk_samples, False
+                )
+                yield data
+        finally:
+            stream.stop_stream(); stream.close(); p.terminate()
+
+    client = _Mistral(api_key=api_key)
+    audio_fmt = AudioFormat(encoding="pcm_s16le", sample_rate=VOXTRAL_RATE)
+    buf: list[str] = []
+    last_delta_time: float = 0.0
+    FLUSH_TIMEOUT = 2.5   # seconds without a new delta → force-flush
+
+    async def flush_buf():
+        """Send whatever is in buf to the steering queue, then clear it."""
+        text = "".join(buf).strip()
+        buf.clear()
+        if len(text) < SILENCE_MIN_CHARS:
+            return
+
+        ui_print(C.VOICE, "🎤", f'{C.BOLD}Voice command:{C.RESET} "{text}"', flush=True)
+
+        if args.developer:
+            # Accumulate memory and let Mistral decide
+            voice_memory.append(text)
+            if len(voice_memory) > 20:
+                voice_memory[:] = voice_memory[-20:]
+
+            new_scene = await asyncio.get_event_loop().run_in_executor(
+                None, dev_memory_to_scene, voice_memory, current_scene_holder[0]
+            )
+            if new_scene and new_scene != current_scene_holder[0]:
+                ui_print(C.APPLIED, "🎬", f'Scene shift: {current_scene_holder[0]} → {C.BOLD}{new_scene}{C.RESET}')
+                current_scene_holder[0] = new_scene
+                prompt_queue.put_nowait(f"__DEV_SCENE__{new_scene}")
+            else:
+                ui_print(C.DIM, "  ", f'Context unchanged — staying on {current_scene_holder[0]}')
+        else:
+            # Normal mode: send utterance directly
+            prompt_queue.put_nowait(text)
+
+    ui_print(C.VOICE, "🎤", "Connecting to Voxtral realtime…", flush=True)
+    try:
+        async for event in client.audio.realtime.transcribe_stream(
+            audio_stream=iter_mic(),
+            model=VOXTRAL_MODEL,
+            audio_format=audio_fmt,
+        ):
+            if stop_event.is_set():
+                break
+            if isinstance(event, RealtimeTranscriptionSessionCreated):
+                ui_print(C.APPLIED, "📡", "Voxtral ready — speak to steer the music!", flush=True)
+            elif isinstance(event, TranscriptionStreamTextDelta):
+                buf.append(event.text)
+                last_delta_time = time.monotonic()
+                joined = "".join(buf)
+                # Overwrite the same line while the user is still speaking
+                print(f"\r{C.VOICE}🎤 Hearing:{C.RESET} {joined[-80:]}   ", end="", flush=True)
+                # Flush immediately on sentence-ending punctuation
+                if joined.rstrip().endswith((".", "!", "?", "…")):
+                    await flush_buf()
+            elif isinstance(event, TranscriptionStreamDone):
+                await flush_buf()
+            elif isinstance(event, RealtimeTranscriptionError):
+                ui_print(C.WARN, "⚠️ ", f"STT error: {event}", flush=True)
+            elif isinstance(event, UnknownRealtimeEvent):
+                # Time-based flush: if we have text but no new delta for FLUSH_TIMEOUT
+                if buf and last_delta_time and (time.monotonic() - last_delta_time) > FLUSH_TIMEOUT:
+                    await flush_buf()
+    except Exception as exc:
+        if not stop_event.is_set():
+            ui_print(C.WARN, "❌", f"Voice listener crashed: {exc}", flush=True)
+            traceback.print_exc()
+
+
+def dev_memory_to_scene(memory: list[str], current_scene: str) -> str:
+    """Ask Mistral if the accumulated voice memory warrants a scene change."""
+    from mistralai import Mistral as _Mistral
+    api_key = os.getenv("MISTRAL_API_KEY")
+    if not api_key:
+        return current_scene
+    client = _Mistral(api_key=api_key)
+
+    memory_text = " | ".join(memory[-10:])  # last 10 utterances
+
+    system = f"""You are a scene selector for a live music system.
+Available scenes: {', '.join(DEV_SCENE_NAMES)}
+
+The CURRENT scene is: {current_scene}
+
+Based on what is being said (accumulated voice memory), decide:
+- If the conversation context still fits the current scene, reply with EXACTLY: {current_scene}
+- If the context has clearly shifted to a different mood/scene, reply with the new scene name.
+
+Scene descriptions:
+  peaceful_village = calm, hiking, nature, peaceful, pastoral, medieval village
+  busy_tavern      = tavern, pub, drinking, festive, lively, medieval bar
+  mysterious_cave  = cave, dungeon, dark, eerie, underground, exploring
+  combat           = fight, battle, enemies, swords, RPG combat, action
+  epic_boss        = boss fight, final battle, epic, massive, climax
+  techno_party     = techno, rave, electronic, dance, party, bass
+  victory          = won, victory, celebration, triumph, success, fanfare
+  paris_rain       = rain, night, city, jazz, noir, melancholy, Paris
+  chase            = chase, pursuit, running, escape, fleeing, urgent
+  puzzle           = puzzle, thinking, mystery, detective, riddle, investigation
+
+Reply with ONLY the scene name. Nothing else."""
+
+    try:
+        resp = client.chat.complete(
+            model="open-mistral-7b",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": f"Recent speech: {memory_text}"},
+            ],
+            max_tokens=20,
+            temperature=0.0,
+        )
+        scene = resp.choices[0].message.content.strip().lower().replace(" ", "_")
+    except Exception:
+        return current_scene
+
+    # Fuzzy match
+    if scene in DEV_SCENES:
+        return scene
+    for key in DEV_SCENE_NAMES:
+        if key in scene or scene in key:
+            return key
+    return current_scene
+
+
+# ---------------------------------------------------------------------------
 # Main async logic
 # ---------------------------------------------------------------------------
 async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
@@ -266,9 +584,32 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     playback_started = threading.Event()
     stop_event = asyncio.Event()
 
-    # ── Palette translator (respects --eleven flag) ──────────────────────
+    # ── Palette translator (respects --eleven / --developer flags) ──────
+    # Track current scene for developer + voice mode
+    current_scene_holder = ["peaceful_village"]  # mutable holder for scene name
+    voice_memory: list[str] = []                 # accumulated voice utterances
+
     def to_palette(p: str) -> dict[str, float]:
-        return eleven_to_palette(p) if args.eleven else raw_to_palette(p)
+        # Developer mode: check for internal scene override from voice
+        if args.developer and p.startswith("__DEV_SCENE__"):
+            scene = p.replace("__DEV_SCENE__", "")
+            if scene in DEV_SCENES:
+                current_scene_holder[0] = scene
+                palette = DEV_SCENES[scene]
+                ui_print(C.APPLIED, "🎬", f'Scene: {C.BOLD}{scene}{C.RESET}  ({len(palette)} prompts)')
+                return dict(palette)
+        if args.developer:
+            result = dev_to_palette(p)
+            # Track which scene was picked
+            for key, val in DEV_SCENES.items():
+                if result == val or result == dict(val):
+                    current_scene_holder[0] = key
+                    break
+            return result
+        elif args.eleven:
+            return eleven_to_palette(p)
+        else:
+            return raw_to_palette(p)
 
     # ── Step 1: translate initial prompt ─────────────────────────────────
     loop = asyncio.get_event_loop()
@@ -362,12 +703,21 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             await asyncio.sleep(1.0)
 
     # ── Launch ──────────────────────────────────────────────────────────────
-    mode_label = "ElevenLabs DNA + Lyria" if args.eleven else "Lyria direct"
+    if args.developer:
+        mode_label = "Developer (10 preset scenes)"
+    elif args.eleven:
+        mode_label = "ElevenLabs DNA + Lyria"
+    else:
+        mode_label = "Lyria direct"
     print(f"\n{C.INFO}{C.BOLD}🎵  Lyria Live DJ  [{mode_label}]{C.RESET}")
-    if args.eleven:
+    if args.developer:
+        print(f"{C.DIM}    10 preset scenes, Mistral picks the best match")
+        for name in DEV_SCENE_NAMES:
+            print(f"      • {name}")
+    elif args.eleven:
         print(f"{C.DIM}    ElevenLabs: compose_detailed() — rich musical DNA, audio discarded")
     else:
-        print(f"{C.DIM}    Lyria direct: prompt used as-is (add --eleven for ElevenLabs DNA)")
+        print(f"{C.DIM}    Lyria direct: prompt used as-is")
     print(f"    Lyria     : live real-time audio generation")
     print(f"    Crossfade : {args.crossfade}s over {args.steps} steps")
     print(f"    Connecting to Lyria RealTime…{C.RESET}\n")
@@ -375,6 +725,9 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
     _loop = asyncio.get_event_loop()
     t_input = threading.Thread(target=input_reader, args=(prompt_queue, _loop), daemon=True)
     t_input.start()
+
+    # Optionally start voice listener
+    voice_task = None
 
     try:
         async with (
@@ -397,13 +750,25 @@ async def live_dj(initial_prompt: str, args: argparse.Namespace) -> None:
             tg.create_task(steering_handler(session))
             tg.create_task(status_display())
 
+            # Start voice listener if --voice
+            if args.voice:
+                tg.create_task(
+                    voice_listener(
+                        prompt_queue, stop_event, args,
+                        current_scene_holder, voice_memory,
+                    )
+                )
+
             print(f"    {C.DIM}Buffering…{C.RESET}", end="\r", flush=True)
             while not playback_started.is_set():
                 await asyncio.sleep(0.05)
 
             print(f"\n{C.APPLIED}{C.BOLD}    🔊 Playback started!{C.RESET}")
+            if args.voice:
+                print(f"{C.DIM}    🎤 Voice input active — just speak to steer.")
             print(f"{C.DIM}    Type a description and press Enter to steer the music.")
-            print(f"    ElevenLabs translates prompt → Lyria steers the music.")
+            if args.developer:
+                print(f"    In developer mode, speech is accumulated and scene changes automatically.")
             print(f"    Press Ctrl+C to stop.{C.RESET}\n")
 
             with sd.OutputStream(
@@ -442,7 +807,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42,
                         help="Lyria generation seed for reproducibility (default: 42)")
     parser.add_argument("--eleven", action="store_true",
-                        help="Use ElevenLabs to enrich prompts into musical DNA before sending to Lyria")
+                        help="Use ElevenLabs to enrich prompts into musical DNA")
+    parser.add_argument("--developer", action="store_true",
+                        help="Developer mode: 10 hardcoded scene palettes, Mistral picks the best match")
+    parser.add_argument("--voice", action="store_true",
+                        help="Enable voice input via Voxtral real-time STT (requires pyaudio)")
     args = parser.parse_args()
 
     initial_prompt = " ".join(args.prompt)
